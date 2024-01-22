@@ -4,7 +4,7 @@
 
 > 🎯 Let's make I18n things to easy!
 
-Rust I18n is a crate for loading localized text from a set of (YAML, JSON or TOML) mapping files. The mappings are converted into data readable by Rust programs at compile time, and then localized text can be loaded by simply calling the provided `t!` or `tr` macro.
+Rust I18n is a crate for loading localized text from a set of (YAML, JSON or TOML) mapping files. The mappings are converted into data readable by Rust programs at compile time, and then localized text can be loaded by simply calling the provided `t!` or `tr!` macro.
 
 Unlike other I18n libraries, Rust I18n's goal is to provide a simple and easy-to-use API.
 
