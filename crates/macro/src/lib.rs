@@ -288,16 +288,16 @@ fn generate_code(
 /// # Example
 ///
 /// ```no_run
-/// # use rust_i18n::vakey;
+/// # use rust_i18n::key;
 /// # fn v1() {
-/// let key = vakey!(name);
+/// let key = key!(name);
 /// # }
 /// # fn v2() {
-/// let key = vakey!("name");
+/// let key = key!("name");
 /// # }
 /// ```
 #[proc_macro]
-pub fn vakey(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn key(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let output = syn::parse::<syn::LitStr>(input.clone())
         .map(|str| str.value())
         .or(syn::parse::<syn::Ident>(input.clone()).map(|ident| format!("{}", ident)));

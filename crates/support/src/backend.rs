@@ -43,6 +43,7 @@ where
     }
 }
 
+#[derive(Default)]
 /// Simple KeyValue storage backend
 pub struct SimpleBackend {
     /// All translations key is flatten key, like `en.hello.world`
@@ -52,9 +53,7 @@ pub struct SimpleBackend {
 impl SimpleBackend {
     /// Create a new SimpleBackend.
     pub fn new() -> Self {
-        SimpleBackend {
-            translations: HashMap::new(),
-        }
+        SimpleBackend::default()
     }
 
     /// Add more translations for the given locale.

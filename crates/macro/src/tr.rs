@@ -41,7 +41,7 @@ impl syn::parse::Parse for Value {
             input.advance_to(&fork);
             return Ok(expr.into());
         }
-        Err(input.error("Expected a expression or an identifier"))
+        Err(input.error("expected a expression or an identifier"))
     }
 }
 
@@ -70,13 +70,13 @@ impl syn::parse::Parse for Argument {
             .parse::<Ident>()
             .map(|v| v.to_string())
             .or_else(|_| input.parse::<LitStr>().map(|v| v.value()))
-            .map_err(|_| input.error("Expected a `string` literal or an identifier"))?;
+            .map_err(|_| input.error("expected a `string` literal or an identifier"))?;
         if input.peek(Token![=>]) {
             let _ = input.parse::<Token![=>]>()?;
         } else if input.peek(Token![=]) {
             let _ = input.parse::<Token![=]>()?;
         } else {
-            return Err(input.error("Expected `=>` or `=`"));
+            return Err(input.error("expected `=>` or `=`"));
         }
         let value = input.parse()?;
         let specifiers = if input.peek(Token![:]) {

@@ -28,7 +28,7 @@ pub fn generate<'a, P: AsRef<Path>>(
     eprintln!("Writing to {}\n", filename);
 
     let text = convert_text(&trs, format);
-    write_file(&output_path, &filename, &text)?;
+    write_file(&output_path, filename, &text)?;
 
     // Finally, return error for let CI fail
     let err = std::io::Error::new(std::io::ErrorKind::Other, "");
@@ -99,7 +99,7 @@ fn generate_result<'a, P: AsRef<Path>>(
             };
 
             trs.entry(key.clone())
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(locale.to_string(), value.to_string());
         }
     }
@@ -146,7 +146,7 @@ mod tests {
             "_version": 2
         }
         "#;
-        assert_eq_json(&result, &expect);
+        assert_eq_json(&result, expect);
 
         trs.insert("hello".to_string(), {
             let mut map = HashMap::new();
@@ -165,7 +165,7 @@ mod tests {
             }
         }
         "#;
-        assert_eq_json(&result, &expect);
+        assert_eq_json(&result, expect);
 
         let format = "yaml";
         let result = convert_text(&trs, format);
