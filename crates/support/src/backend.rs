@@ -81,6 +81,22 @@ impl SimpleBackend {
             self.translations.insert(locale.into(), data.clone());
         }
     }
+
+    /// Add more translations for the given locale from a key-value pair iterator.
+    pub fn extend_locale_from_iter<'r, I>(&mut self, locale: &str, iter: I)
+    where
+        I: Iterator<Item = &'r (&'r str, &'r str)>,
+    {
+        let trs = self.translations.entry(locale.into()).or_default();
+        for (k, v) in iter {
+            trs.insert((*k).into(), (*v).into());
+        }
+    }
+
+    /// Add more translations for the given locale from a key-value pair slice.
+    pub fn extend_locale_from_slice(&mut self, locale: &str, data: &[(&str, &str)]) {
+        self.extend_locale_from_iter(locale, data.iter());
+    }
 }
 
 impl Backend for SimpleBackend {
