@@ -284,9 +284,15 @@ fn generate_code(
             });
         });
 
+        let trs_var_name = format!(
+            "_RUST_I18N_TRS_{}",
+            locale.replace('-', "_").replace('.', "_").to_uppercase()
+        );
+        let trs_var = Ident::new(&trs_var_name, proc_macro2::Span::call_site());
+
         all_translations.push(quote! {
-            let trs = [#(#sub_trs),*];
-            backend.add_translations(#locale, &trs.into_iter().collect());
+            const #trs_var: &[(&str, &str)] = &[#(#sub_trs),*];
+            backend.extend_locale_from_slice(#locale, #trs_var);
         });
     });
 
