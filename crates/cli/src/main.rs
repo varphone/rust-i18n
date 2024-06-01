@@ -1,3 +1,4 @@
+use anstyle::{AnsiColor, Color, Style};
 use anyhow::Error;
 use clap::{Args, Parser, Subcommand};
 use indexmap::IndexMap;
@@ -96,6 +97,33 @@ struct I18nExportArgs {
     manifest_dir: Option<String>,
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Lints {
+    #[default]
+    Unused,
+}
+
+impl FromStr for Lints {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "unused" => Ok(Lints::Unused),
+            _ => Err("invalid lint".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct I18nLintArgs {
+    /// Specifies the lints to execute. Currently, only the `unused` lint is supported.
+    #[arg(short = 'l', long, default_value = "unused", verbatim_doc_comment)]
+    lints: Lints,
+    /// Directory to look for `Cargo.toml` that includes `package.metadata.i18n`.
+    #[arg(default_value = ".", last = true)]
+    manifest_dir: Option<String>,
+}
+
 #[derive(Debug, Args)]
 struct I18nSortArgs {
     /// Modify the loaded i18n file in-place, instead of creating a new one.
@@ -125,6 +153,13 @@ enum Commands {
     /// ```
     #[clap(verbatim_doc_comment)]
     Export(I18nExportArgs),
+    #[clap(verbatim_doc_comment)]
+    /// Run lints on the i18n files
+    ///
+    /// This command scans all i18n files in the locales directory and runs lints
+    /// on them. Currently, the only lint available is `unused`, which checks for
+    /// unused translations in the i18n files.
+    Lint(I18nLintArgs),
     /// Sort i18n file by key and locale
     ///
     /// This command scans all i18n files in the locales directory, sorts them by
@@ -380,6 +415,72 @@ fn write_file(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> Result<(), Erro
     Ok(())
 }
 
+const IDENT_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const KEY_STYLE: Style = Style::new().bold();
+const LIST_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const PATH_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+
+macro_rules! msg {
+    (FOUND_KEYS, $len:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} keys in source code", $len);
+    };
+    (FOUND_UNUSED_KEYS, $len:expr, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} unused keys in {PATH_STYLE}{}{PATH_STYLE:#}", $len, $path);
+    };
+    (LIST_ITEM, $key:expr) => {
+        println!("  {LIST_STYLE}-{LIST_STYLE:#} {KEY_STYLE}{}{KEY_STYLE:#}", $key);
+    };
+    (LOADING, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
+    };
+    (SCANNING, $root:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{}{PATH_STYLE:#} ...", $root);
+    };
+}
+
+fn i18n_lint(args: I18nLintArgs) -> Result<(), Error> {
+    let root = args
+        .manifest_dir
+        .ok_or(anyhow::anyhow!("missing manifest directory"))?;
+    let config = I18nConfig::load(Path::new(&root))?;
+    let locales_path = find_load_path(&root, &config)?;
+    let path_pattern = format!("{}/**/*.{{yml,yaml,json,toml}}", locales_path.display());
+
+    // println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{root}{PATH_STYLE:#} ...");
+    msg!(SCANNING, root);
+
+    let mut extrated = HashMap::new();
+    iter::iter_crate(&root, |path, source| {
+        extractor::extract(&mut extrated, path, source, config.clone())
+    })?;
+
+    let keys = extrated.keys().collect::<HashSet<_>>();
+    msg!(FOUND_KEYS, keys.len());
+
+    for entry in globwalk::glob(path_pattern)? {
+        let entry = entry.unwrap().into_path();
+
+        msg!(LOADING, entry.display());
+
+        let tmp_trs = rust_i18n_support::load_locale(&entry);
+        match args.lints {
+            Lints::Unused => {
+                let keys: HashSet<_> = tmp_trs.iter().flat_map(|(_, map)| map.keys()).collect();
+                let unused_keys = keys
+                    .into_iter()
+                    .filter(|key| !extrated.contains_key(*key))
+                    .collect::<HashSet<_>>();
+                msg!(FOUND_UNUSED_KEYS, unused_keys.len(), entry.display());
+                for key in unused_keys {
+                    msg!(LIST_ITEM, key);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn i18n_sort(args: I18nSortArgs) -> Result<(), Error> {
     let root = args
         .manifest_dir
@@ -451,6 +552,7 @@ fn main() -> Result<(), Error> {
         CargoCli::I18n(args) => match args.cmd {
             Some(cmd) => match cmd {
                 Commands::Export(args) => i18n_export(args),
+                Commands::Lint(args) => i18n_lint(args),
                 Commands::Sort(args) => i18n_sort(args),
             },
             None => i18n(args),
