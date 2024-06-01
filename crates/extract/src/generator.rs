@@ -106,7 +106,7 @@ fn generate_result<'a, P: AsRef<Path>>(
     trs
 }
 
-fn write_file<P: AsRef<Path>>(output: &P, filename: &str, data: &str) -> Result<()> {
+pub fn write_file<P: AsRef<Path>>(output: &P, filename: &str, data: &str) -> Result<()> {
     let output_file = std::path::Path::new(output.as_ref()).join(String::from(filename));
     let folder = output_file.parent().unwrap();
 

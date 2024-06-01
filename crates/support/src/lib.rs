@@ -39,6 +39,60 @@ fn merge_value(a: &mut Value, b: &Value) {
     }
 }
 
+// Load a locale file into flatten key, value HashMap
+pub fn load_locale<P>(path: P) -> HashMap<String, HashMap<String, String>>
+where
+    P: AsRef<Path>,
+{
+    let path = path.as_ref();
+    let mut result: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut translations = HashMap::new();
+
+    // check dir exists
+    if !path.exists() {
+        if is_debug() {
+            println!("cargo:i18n-error=path not exists: {}", path.display());
+        }
+        return result;
+    }
+
+    if is_debug() {
+        println!("cargo:i18n-load={}", path.display());
+    }
+
+    let locale = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.split('.').last())
+        .unwrap();
+
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap();
+
+    let file = File::open(path).expect("Failed to open file");
+    let mut reader = std::io::BufReader::new(file);
+    let mut content = String::new();
+
+    reader
+        .read_to_string(&mut content)
+        .expect("Read file failed.");
+
+    let trs = parse_file(&content, ext, locale)
+        .unwrap_or_else(|err| panic!("Parse file `{}` failed: {}", path.display(), err));
+
+    trs.into_iter().for_each(|(k, new_value)| {
+        translations
+            .entry(k)
+            .and_modify(|old_value| merge_value(old_value, &new_value))
+            .or_insert(new_value);
+    });
+
+    translations.iter().for_each(|(locale, trs)| {
+        result.insert(locale.to_string(), flatten_keys("", trs));
+    });
+
+    result
+}
+
 // Load locales into flatten key, value HashMap
 pub fn load_locales<F: Fn(&str) -> bool>(
     locales_path: &str,
