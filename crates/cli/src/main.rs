@@ -242,7 +242,19 @@ fn filter_locales(available_locales: &mut HashSet<String>, locales: &[String]) {
 fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
     let root = args.manifest_dir.unwrap_or(".".to_string());
     let config = I18nConfig::load(Path::new(&root))?;
-    let tmp_trs = rust_i18n_support::load_locales(&config.load_path, |_| false);
+    let load_path = find_load_path(&root, &config)?;
+    let load_path_str = load_path.to_string_lossy();
+
+    println!(r#"rust-i18n: loading locales from "{}" ..."#, load_path_str);
+
+    let tmp_trs = rust_i18n_support::load_locales(&load_path_str, |_| false);
+    for (locale, trs) in tmp_trs.iter() {
+        println!(
+            "rust-i18n: loaded {} translations for {}",
+            trs.len(),
+            locale
+        );
+    }
 
     let mut available_locales: HashSet<String> = config
         .available_locales
@@ -297,8 +309,8 @@ fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
 fn convert_csv_text(trs: &IndexMap<String, IndexMap<String, String>>) -> Result<String, Error> {
     let mut wtr = csv::Writer::from_writer(vec![]);
     let mut header = vec!["key".to_string()];
-    for (locale, _) in trs.values().next().unwrap() {
-        header.push(locale.clone());
+    if let Some(map) = trs.values().next() {
+        header.extend(map.keys().cloned());
     }
     wtr.write_record(&header)?;
     for (key, val) in trs {
@@ -356,7 +368,7 @@ fn find_load_path(root: &str, config: &I18nConfig) -> Result<PathBuf, Error> {
         Ok(path.into_path_buf())
     } else {
         Err(anyhow::anyhow!(
-            "Missing load path: {}",
+            "missing load path: {}",
             load_path.display()
         ))
     }
