@@ -169,6 +169,47 @@ enum Commands {
     Sort(I18nSortArgs),
 }
 
+const ERROR_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const IDENT_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const KEY_STYLE: Style = Style::new().bold();
+const PATH_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+
+macro_rules! msg {
+    (ERROR, $msg:expr) => {
+        eprintln!("{ERROR_STYLE}rust-i18n{ERROR_STYLE:#}: {msg}", msg = $msg);
+    };
+    (EXPORTED_TO, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: exported to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
+    };
+    (EXPORTING_LOCALES, $locales:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: exporting locales: {KEY_STYLE}{locales:?}{KEY_STYLE:#}", locales = $locales);
+    };
+    (FOUND_KEYS, $len:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} keys in source code", $len);
+    };
+    (FOUND_UNUSED_KEYS, $len:expr, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} unused keys in {PATH_STYLE}{}{PATH_STYLE:#}", $len, $path);
+    };
+    (LIST_ITEM, $key:expr) => {
+        println!("  {ERROR_STYLE}-{ERROR_STYLE:#} {KEY_STYLE}{}{KEY_STYLE:#}", $key);
+    };
+    (LOADED_TRS, $len:expr, $locale:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loaded {} translations for {KEY_STYLE}{}{KEY_STYLE:#}", $len, $locale);
+    };
+    (LOADING, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
+    };
+    (LOADING_LOCALES, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading locales from {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
+    };
+    (SCANNING, $root:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{}{PATH_STYLE:#} ...", $root);
+    };
+    (SORTED_TO, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: sorted to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
+    };
+}
+
 /// Remove quotes from a string at the start and end.
 fn remove_quotes(s: &str) -> &str {
     let mut start = 0;
@@ -280,15 +321,11 @@ fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
     let load_path = find_load_path(&root, &config)?;
     let load_path_str = load_path.to_string_lossy();
 
-    println!(r#"rust-i18n: loading locales from "{}" ..."#, load_path_str);
+    msg!(LOADING_LOCALES, load_path_str);
 
     let tmp_trs = rust_i18n_support::load_locales(&load_path_str, |_| false);
     for (locale, trs) in tmp_trs.iter() {
-        println!(
-            "rust-i18n: loaded {} translations for {}",
-            trs.len(),
-            locale
-        );
+        msg!(LOADED_TRS, trs.len(), locale);
     }
 
     let mut available_locales: HashSet<String> = config
@@ -301,7 +338,7 @@ fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
     let mut sorted_locales: Vec<String> = available_locales.into_iter().collect();
     sorted_locales.sort();
 
-    println!("rust-i18n: exporting locales: {:?}", sorted_locales);
+    msg!(EXPORTING_LOCALES, sorted_locales);
 
     let keys: HashSet<_> = tmp_trs.iter().flat_map(|(_, map)| map.keys()).collect();
     let mut sorted_keys: Vec<&String> = keys.into_iter().collect();
@@ -336,7 +373,7 @@ fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
     write_file(new_path, text)
         .map_err(|err| anyhow::anyhow!(r#"export to "{}" failed: {}"#, new_path.display(), err))?;
 
-    println!(r#"rust-i18n: exported to "{}""#, new_path.display());
+    msg!(EXPORTED_TO, new_path.display());
 
     Ok(())
 }
@@ -415,29 +452,6 @@ fn write_file(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> Result<(), Erro
     Ok(())
 }
 
-const IDENT_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-const KEY_STYLE: Style = Style::new().bold();
-const LIST_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
-const PATH_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-
-macro_rules! msg {
-    (FOUND_KEYS, $len:expr) => {
-        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} keys in source code", $len);
-    };
-    (FOUND_UNUSED_KEYS, $len:expr, $path:expr) => {
-        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} unused keys in {PATH_STYLE}{}{PATH_STYLE:#}", $len, $path);
-    };
-    (LIST_ITEM, $key:expr) => {
-        println!("  {LIST_STYLE}-{LIST_STYLE:#} {KEY_STYLE}{}{KEY_STYLE:#}", $key);
-    };
-    (LOADING, $path:expr) => {
-        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
-    };
-    (SCANNING, $root:expr) => {
-        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{}{PATH_STYLE:#} ...", $root);
-    };
-}
-
 fn i18n_lint(args: I18nLintArgs) -> Result<(), Error> {
     let root = args
         .manifest_dir
@@ -446,7 +460,6 @@ fn i18n_lint(args: I18nLintArgs) -> Result<(), Error> {
     let locales_path = find_load_path(&root, &config)?;
     let path_pattern = format!("{}/**/*.{{yml,yaml,json,toml}}", locales_path.display());
 
-    // println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{root}{PATH_STYLE:#} ...");
     msg!(SCANNING, root);
 
     let mut extrated = HashMap::new();
@@ -495,7 +508,7 @@ fn i18n_sort(args: I18nSortArgs) -> Result<(), Error> {
             continue;
         }
 
-        println!(r#"rust-i18n: loading "{}" ..."#, entry.display());
+        msg!(LOADING, entry.display());
 
         let tmp_trs = rust_i18n_support::load_locale(&entry);
         let available_locales: HashSet<_> = config
@@ -541,7 +554,7 @@ fn i18n_sort(args: I18nSortArgs) -> Result<(), Error> {
         let text = convert_text(&new_trs, &ext)?;
         write_file(&new_path, &text)
             .map_err(|err| anyhow::anyhow!(r#"sort to "{}" failed: {}"#, &new_path, err))?;
-        println!(r#"rust-i18n: sorted to "{}""#, &new_path);
+        msg!(SORTED_TO, &new_path);
     }
 
     Ok(())
@@ -560,7 +573,7 @@ fn main() -> Result<(), Error> {
     };
 
     if let Err(err) = result {
-        eprintln!("rust-i18n: {}", err);
+        msg!(ERROR, err);
         std::process::exit(1);
     }
 
