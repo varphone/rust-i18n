@@ -9,7 +9,7 @@ mod config;
 mod cow_str;
 mod minify_key;
 pub use atomic_str::AtomicStr;
-pub use backend::{Backend, BackendExt, SimpleBackend};
+pub use backend::{Backend, BackendExt, SimpleBackend, StaticBackend};
 pub use config::I18nConfig;
 pub use cow_str::CowStr;
 pub use minify_key::{
