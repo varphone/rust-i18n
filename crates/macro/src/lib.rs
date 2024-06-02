@@ -286,7 +286,7 @@ fn generate_code(
 
         let trs_var_name = format!(
             "_RUST_I18N_TRS_{}",
-            locale.replace('-', "_").replace('.', "_").to_uppercase()
+            locale.replace(['-', '.'], "_").to_uppercase()
         );
         let trs_var = Ident::new(&trs_var_name, proc_macro2::Span::call_site());
 
