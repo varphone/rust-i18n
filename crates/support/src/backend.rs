@@ -153,13 +153,109 @@ impl Default for SimpleBackend {
     }
 }
 
+/// A simple ley-value storage backend using static strings.
+pub struct StaticBackend {
+    /// All translations key is flatten key, like `en.hello.world`
+    translations: HashMap<&'static str, HashMap<&'static str, &'static str>>,
+}
+
+impl StaticBackend {
+    /// Create a new StaticBackend.
+    pub fn new() -> Self {
+        StaticBackend {
+            translations: HashMap::new(),
+        }
+    }
+
+    /// Add more translations for the given locale.
+    ///
+    /// ```no_run
+    /// # use std::collections::HashMap;
+    /// # use rust_i18n_support::StaticBackend;
+    /// # let mut backend = StaticBackend::new();
+    /// let mut trs = HashMap::<&'static str, &'static str>::new();
+    /// trs.insert("hello", "Hello");
+    /// trs.insert("foo", "Foo bar");
+    /// backend.add_translations("en", &trs);
+    /// ```
+    pub fn add_translations(
+        &mut self,
+        locale: &'static str,
+        data: &HashMap<&'static str, &'static str>,
+    ) {
+        let data = data.clone().into_iter().collect::<HashMap<_, _>>();
+
+        if let Some(trs) = self.translations.get_mut(locale) {
+            trs.extend(data.clone());
+        } else {
+            self.translations.insert(locale, data.clone());
+        }
+    }
+
+    /// Add more translations for the given locale from a key-value pair iterator.
+    pub fn extend_locale_from_iter<'r, I>(&mut self, locale: &'static str, iter: I)
+    where
+        I: Iterator<Item = &'r (&'static str, &'static str)>,
+    {
+        let trs = self.translations.entry(locale).or_default();
+        for (k, v) in iter {
+            trs.insert(*k, *v);
+        }
+    }
+
+    /// Add more translations for the given locale from a key-value pair slice.
+    pub fn extend_locale_from_slice(
+        &mut self,
+        locale: &'static str,
+        data: &[(&'static str, &'static str)],
+    ) {
+        self.extend_locale_from_iter(locale, data.iter());
+    }
+}
+
+impl Backend for StaticBackend {
+    fn available_locales(&self) -> Vec<Cow<'_, str>> {
+        let mut locales = self
+            .translations
+            .keys()
+            .map(|k| Cow::from(*k))
+            .collect::<Vec<_>>();
+        locales.sort();
+        locales
+    }
+
+    fn translate(&self, locale: &str, key: &str) -> Option<Cow<'_, str>> {
+        if let Some(trs) = self.translations.get(locale) {
+            return trs.get(key).map(|s| Cow::from(*s));
+        }
+
+        None
+    }
+
+    fn messages_for_locale(&self, locale: &str) -> Option<Vec<(Cow<'_, str>, Cow<'_, str>)>> {
+        self.translations.get(locale).map(|trs| {
+            trs.iter()
+                .map(|(k, v)| (Cow::from(*k), Cow::from(*v)))
+                .collect()
+        })
+    }
+}
+
+impl BackendExt for StaticBackend {}
+
+impl Default for StaticBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
     use std::collections::HashMap;
 
-    use super::SimpleBackend;
     use super::{Backend, BackendExt};
+    use super::{SimpleBackend, StaticBackend};
 
     #[test]
     fn test_simple_backend() {
@@ -181,6 +277,27 @@ mod tests {
             backend.translate("zh-CN", "foo"),
             Some(Cow::from("Foo 测试"))
         );
+
+        assert_eq!(backend.available_locales(), vec!["en", "zh-CN"]);
+    }
+
+    #[test]
+    fn test_static_backend() {
+        let mut backend = StaticBackend::new();
+        let mut data = HashMap::<&str, &str>::new();
+        data.insert("hello", "Hello");
+        data.insert("foo", "Foo bar");
+        backend.add_translations("en", &data);
+
+        let mut data_cn = HashMap::<&str, &str>::new();
+        data_cn.insert("hello", "你好");
+        data_cn.insert("foo", "Foo 测试");
+        backend.add_translations("zh-CN", &data_cn);
+
+        assert_eq!(backend.translate("en", "hello"), Some(Cow::from("Hello")));
+        assert_eq!(backend.translate("en", "foo"), Some(Cow::from("Foo bar")));
+        assert_eq!(backend.translate("zh-CN", "hello"), Some(Cow::from("你好")));
+        assert_eq!(backend.translate("zh-CN", "foo"), Some(Cow::from("Foo 测试")));
 
         assert_eq!(backend.available_locales(), vec!["en", "zh-CN"]);
     }
@@ -215,5 +332,15 @@ mod tests {
         );
 
         assert_eq!(combined.available_locales(), vec!["en", "zh-CN"]);
+
+        let mut backend = SimpleBackend::new();
+        backend.extend_locale_from_slice("en", &[("hello", "Hello"), ("foo", "Foo bar")]);
+
+        let mut backend2 = StaticBackend::new();
+        backend2.extend_locale_from_slice("zh-TW", &[("hello", "你好"), ("foo", "Foo 测试")]);
+
+        let combined = backend.extend(backend2);
+        assert_eq!(combined.translate("en", "hello"), Some(Cow::from("Hello")));
+        assert_eq!(combined.translate("zh-TW", "hello"), Some(Cow::from("你好")));
     }
 }
