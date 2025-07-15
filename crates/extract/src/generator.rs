@@ -39,9 +39,17 @@ fn convert_text(trs: &Translations, format: &str) -> String {
     let mut value = serde_json::Value::Object(serde_json::Map::new());
     value["_version"] = serde_json::Value::Number(serde_json::Number::from(2));
 
-    for (key, val) in trs {
+    let mut keys = trs.keys().collect::<Vec<_>>();
+    keys.sort();
+
+    for key in keys {
+        let val = trs.get(key).unwrap();
         let mut obj = serde_json::Value::Object(serde_json::Map::new());
-        for (locale, text) in val {
+        let mut locales = val.keys().collect::<Vec<_>>();
+        locales.sort();
+
+        for locale in locales {
+            let text = val.get(locale).unwrap();
             obj[locale] = serde_json::Value::String(text.clone());
         }
         value[key] = obj;

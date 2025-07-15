@@ -1,8 +1,15 @@
+use anstyle::{AnsiColor, Color, Style};
 use anyhow::Error;
-use clap::{Args, Parser};
+use clap::{Args, Parser, Subcommand};
+use indexmap::IndexMap;
+use normpath::PathExt;
 use rust_i18n_extract::extractor::Message;
 use rust_i18n_extract::{extractor, generator, iter};
 use rust_i18n_support::{I18nConfig, MinifyKey};
+use std::collections::HashSet;
+use std::io::Write;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::{collections::HashMap, path::Path};
 
 #[derive(Parser)]
@@ -23,6 +30,10 @@ enum CargoCli {
 ///
 /// https://github.com/longbridge/rust-i18n
 struct I18nArgs {
+    /// The subcommand to run.
+    #[command(subcommand)]
+    cmd: Option<Commands>,
+
     /// Manually add a translation to the localization file.
     ///
     /// This is useful for non-literal values in the `t!` macro.
@@ -37,6 +48,166 @@ struct I18nArgs {
     /// Extract all untranslated I18n texts from source code
     #[arg(default_value = "./", last = true)]
     source: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum MissedBehavior {
+    #[default]
+    Default,
+    Empty,
+}
+
+impl FromStr for MissedBehavior {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" => Ok(MissedBehavior::Default),
+            "empty" => Ok(MissedBehavior::Empty),
+            _ => Err("invalid missed behavior".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct I18nExportArgs {
+    /// Specifies locales for the exported file. If not specified, all locales are
+    /// included. Prefixes can be used:
+    /// - `!` to exclude locales.
+    /// - `+` to add extra locales.
+    /// - no prefix to explicitly include locales, this priority is higher than `-`.
+    ///
+    /// For example, `-l en,+es` includes English and Spanish, excluding others.
+    /// Even if Spanish is unavailable, it will be added to the exported file.
+    /// Alternatively, `-l +es,!fr` includes all locales but French and adds Spanish.
+    ///
+    /// Each locale argument can be a comma-separated list, e.g. `-l en,+es,!fr`.
+    #[arg(short = 'l', long, num_args(1..), value_delimiter=',', verbatim_doc_comment)]
+    locales: Vec<String>,
+    /// How to handle missing translations in the exported file.
+    /// - `default`: Use the default value from the source file.
+    /// - `empty`: Export an empty string for missing translations.
+    #[arg(short = 'm', long, default_value = "default", verbatim_doc_comment)]
+    missed: MissedBehavior,
+    /// Specifies the output file for the exported i18n data.
+    #[arg(short, long, default_value = "exported.csv")]
+    output: String,
+    /// Directory to look for `Cargo.toml` that includes `package.metadata.i18n`.
+    #[arg(default_value = ".", last = true)]
+    manifest_dir: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Lints {
+    #[default]
+    Unused,
+}
+
+impl FromStr for Lints {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "unused" => Ok(Lints::Unused),
+            _ => Err("invalid lint".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct I18nLintArgs {
+    /// Specifies the lints to execute. Currently, only the `unused` lint is supported.
+    #[arg(short = 'l', long, default_value = "unused", verbatim_doc_comment)]
+    lints: Lints,
+    /// Directory to look for `Cargo.toml` that includes `package.metadata.i18n`.
+    #[arg(default_value = ".", last = true)]
+    manifest_dir: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct I18nSortArgs {
+    /// Modify the loaded i18n file in-place, instead of creating a new one.
+    #[arg(short, long, default_value_t = false)]
+    inplace: bool,
+    /// Reverse the sort order. Default is ascending.
+    #[arg(short, long, default_value_t = false)]
+    reverse: bool,
+    /// Directory to look for `Cargo.toml` that includes `package.metadata.i18n`.
+    #[arg(default_value = ".", last = true, verbatim_doc_comment)]
+    manifest_dir: Option<String>,
+}
+
+/// The subcommands for the `cargo i18n` command.
+#[derive(Subcommand)]
+enum Commands {
+    /// Export all translations to a single file
+    ///
+    /// The export format automatically detected from the output file extension.
+    /// Supported formats are JSON, YAML, TOML, and CSV.
+    ///
+    /// The CSV format will have the following structure:
+    /// ```csv
+    /// key, en, es, fr
+    /// "hello", "Hello", "Hola", "Bonjour"
+    /// "world", "World", "Mundo", "Monde"
+    /// ```
+    #[clap(verbatim_doc_comment)]
+    Export(I18nExportArgs),
+    #[clap(verbatim_doc_comment)]
+    /// Run lints on the i18n files
+    ///
+    /// This command scans all i18n files in the locales directory and runs lints
+    /// on them. Currently, the only lint available is `unused`, which checks for
+    /// unused translations in the i18n files.
+    Lint(I18nLintArgs),
+    /// Sort i18n file by key and locale
+    ///
+    /// This command scans all i18n files in the locales directory, sorts them by
+    /// key and locale, then writes the sorted content to a new file or overwrites
+    /// the existing file if the `--inplace` flag is specified.
+    #[clap(verbatim_doc_comment)]
+    Sort(I18nSortArgs),
+}
+
+const ERROR_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
+const IDENT_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const KEY_STYLE: Style = Style::new().bold();
+const PATH_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+
+macro_rules! msg {
+    (ERROR, $msg:expr) => {
+        eprintln!("{ERROR_STYLE}rust-i18n{ERROR_STYLE:#}: {msg}", msg = $msg);
+    };
+    (EXPORTED_TO, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: exported to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
+    };
+    (EXPORTING_LOCALES, $locales:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: exporting locales: {KEY_STYLE}{locales:?}{KEY_STYLE:#}", locales = $locales);
+    };
+    (FOUND_KEYS, $len:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} keys in source code", $len);
+    };
+    (FOUND_UNUSED_KEYS, $len:expr, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: found {} unused keys in {PATH_STYLE}{}{PATH_STYLE:#}", $len, $path);
+    };
+    (LIST_ITEM, $key:expr) => {
+        println!("  {ERROR_STYLE}-{ERROR_STYLE:#} {KEY_STYLE}{}{KEY_STYLE:#}", $key);
+    };
+    (LOADED_TRS, $len:expr, $locale:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loaded {} translations for {KEY_STYLE}{}{KEY_STYLE:#}", $len, $locale);
+    };
+    (LOADING, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
+    };
+    (LOADING_LOCALES, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: loading locales from {PATH_STYLE}{}{PATH_STYLE:#} ...", $path);
+    };
+    (SCANNING, $root:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: scanning locales in {PATH_STYLE}{}{PATH_STYLE:#} ...", $root);
+    };
+    (SORTED_TO, $path:expr) => {
+        println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: sorted to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
+    };
 }
 
 /// Remove quotes from a string at the start and end.
@@ -96,9 +267,7 @@ fn add_translations(
     }
 }
 
-fn main() -> Result<(), Error> {
-    let CargoCli::I18n(args) = CargoCli::parse();
-
+fn i18n(args: I18nArgs) -> Result<(), Error> {
     let mut results = HashMap::new();
 
     let source_path = args.source.expect("Missing source path");
@@ -116,16 +285,295 @@ fn main() -> Result<(), Error> {
     let mut messages: Vec<_> = results.iter().collect();
     messages.sort_by_key(|(_k, m)| m.index);
 
-    let mut has_error = false;
-
     let output_path = Path::new(&source_path).join(&cfg.load_path);
 
-    let result = generator::generate(output_path, &cfg.available_locales, messages.clone());
-    if result.is_err() {
-        has_error = true;
+    generator::generate(output_path, &cfg.available_locales, messages.clone())?;
+
+    Ok(())
+}
+
+fn filter_locales(available_locales: &mut HashSet<String>, locales: &[String]) {
+    let (explicit_locales, modifiers): (Vec<_>, Vec<_>) = locales
+        .iter()
+        .partition(|s| !(s.starts_with('+') || s.starts_with('!')));
+
+    if !explicit_locales.is_empty() {
+        available_locales.retain(|s| explicit_locales.contains(&s));
     }
 
-    if has_error {
+    for locale in modifiers {
+        let (prefix, locale) = locale.split_at(1);
+        match prefix {
+            "!" => {
+                available_locales.remove(locale);
+            }
+            "+" => {
+                available_locales.insert(locale.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn i18n_export(args: I18nExportArgs) -> Result<(), Error> {
+    let root = args.manifest_dir.unwrap_or(".".to_string());
+    let config = I18nConfig::load(Path::new(&root))?;
+    let load_path = find_load_path(&root, &config)?;
+    let load_path_str = load_path.to_string_lossy();
+
+    msg!(LOADING_LOCALES, load_path_str);
+
+    let tmp_trs = rust_i18n_support::load_locales(&load_path_str, |_| false);
+    for (locale, trs) in tmp_trs.iter() {
+        msg!(LOADED_TRS, trs.len(), locale);
+    }
+
+    let mut available_locales: HashSet<String> = config
+        .available_locales
+        .iter()
+        .chain(tmp_trs.keys())
+        .cloned()
+        .collect();
+    filter_locales(&mut available_locales, &args.locales);
+    let mut sorted_locales: Vec<String> = available_locales.into_iter().collect();
+    sorted_locales.sort();
+
+    msg!(EXPORTING_LOCALES, sorted_locales);
+
+    let keys: HashSet<_> = tmp_trs.iter().flat_map(|(_, map)| map.keys()).collect();
+    let mut sorted_keys: Vec<&String> = keys.into_iter().collect();
+    sorted_keys.sort();
+
+    let mut new_trs: IndexMap<String, IndexMap<String, String>> = IndexMap::new();
+    for key in sorted_keys {
+        let mut obj: IndexMap<String, String> = IndexMap::new();
+        for locale in sorted_locales.iter() {
+            let msg = tmp_trs.get(locale).and_then(|m| m.get(key));
+            let msg = match (msg, args.missed) {
+                (Some(msg), _) => msg.clone(),
+                (None, MissedBehavior::Default) => tmp_trs
+                    .get(&config.default_locale)
+                    .and_then(|m| m.get(key))
+                    .unwrap_or(&"".to_string())
+                    .clone(),
+                (None, MissedBehavior::Empty) => "".to_string(),
+            };
+            obj.insert(locale.clone(), msg);
+        }
+        new_trs.insert(key.clone(), obj);
+    }
+
+    let new_path = Path::new(&args.output);
+    let ext = new_path
+        .extension()
+        .ok_or(anyhow::anyhow!("unexpected file format"))?
+        .to_string_lossy();
+
+    let text = convert_text(&new_trs, &ext)?;
+    write_file(new_path, text)
+        .map_err(|err| anyhow::anyhow!(r#"export to "{}" failed: {}"#, new_path.display(), err))?;
+
+    msg!(EXPORTED_TO, new_path.display());
+
+    Ok(())
+}
+
+fn convert_csv_text(trs: &IndexMap<String, IndexMap<String, String>>) -> Result<String, Error> {
+    let mut wtr = csv::Writer::from_writer(vec![]);
+    let mut header = vec!["key".to_string()];
+    if let Some(map) = trs.values().next() {
+        header.extend(map.keys().cloned());
+    }
+    wtr.write_record(&header)?;
+    for (key, val) in trs {
+        let mut row = vec![key.clone()];
+        for (_, text) in val {
+            row.push(text.clone());
+        }
+        wtr.write_record(&row)?;
+    }
+    let text = String::from_utf8(wtr.into_inner()?)?;
+    Ok(text)
+}
+
+fn convert_text(
+    trs: &IndexMap<String, IndexMap<String, String>>,
+    format: &str,
+) -> Result<String, Error> {
+    if format == "csv" {
+        return convert_csv_text(trs);
+    }
+
+    let mut value = serde_json::Value::Object(serde_json::Map::new());
+    value["_version"] = serde_json::Value::Number(serde_json::Number::from(2));
+
+    for (key, val) in trs {
+        let mut obj = serde_json::Value::Object(serde_json::Map::new());
+        for (locale, text) in val {
+            obj[locale] = serde_json::Value::String(text.clone());
+        }
+        value[key] = obj;
+    }
+
+    match format {
+        "json" => Ok(serde_json::to_string_pretty(&value)?),
+        "yaml" | "yml" => {
+            let text = serde_yaml::to_string(&value)?;
+            // Remove leading `---`
+            Ok(text.trim_start_matches("---").trim_start().to_string())
+        }
+        "toml" => Ok(toml::to_string_pretty(&value)?),
+        _ => Err(anyhow::anyhow!("unexpected file format: {}", format)),
+    }
+}
+
+fn find_load_path(root: &str, config: &I18nConfig) -> Result<PathBuf, Error> {
+    let load_path = Path::new(&config.load_path);
+    let load_path = if load_path.is_absolute() {
+        load_path.to_path_buf()
+    } else {
+        Path::new(&root).join(&config.load_path)
+    };
+
+    if load_path.exists() {
+        let path = load_path.normalize()?;
+        Ok(path.into_path_buf())
+    } else {
+        Err(anyhow::anyhow!(
+            "missing load path: {}",
+            load_path.display()
+        ))
+    }
+}
+
+fn write_file(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> Result<(), Error> {
+    let mut output = ::std::fs::File::create(path)?;
+    output.write_all(data.as_ref())?;
+    Ok(())
+}
+
+fn i18n_lint(args: I18nLintArgs) -> Result<(), Error> {
+    let root = args
+        .manifest_dir
+        .ok_or(anyhow::anyhow!("missing manifest directory"))?;
+    let config = I18nConfig::load(Path::new(&root))?;
+    let locales_path = find_load_path(&root, &config)?;
+    let path_pattern = format!("{}/**/*.{{yml,yaml,json,toml}}", locales_path.display());
+
+    msg!(SCANNING, root);
+
+    let mut extrated = HashMap::new();
+    iter::iter_crate(&root, |path, source| {
+        extractor::extract(&mut extrated, path, source, config.clone())
+    })?;
+
+    let keys = extrated.keys().collect::<HashSet<_>>();
+    msg!(FOUND_KEYS, keys.len());
+
+    for entry in globwalk::glob(path_pattern)? {
+        let entry = entry.unwrap().into_path();
+
+        msg!(LOADING, entry.display());
+
+        let tmp_trs = rust_i18n_support::load_locale(&entry);
+        match args.lints {
+            Lints::Unused => {
+                let keys: HashSet<_> = tmp_trs.iter().flat_map(|(_, map)| map.keys()).collect();
+                let unused_keys = keys
+                    .into_iter()
+                    .filter(|key| !extrated.contains_key(*key))
+                    .collect::<HashSet<_>>();
+                msg!(FOUND_UNUSED_KEYS, unused_keys.len(), entry.display());
+                for key in unused_keys {
+                    msg!(LIST_ITEM, key);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn i18n_sort(args: I18nSortArgs) -> Result<(), Error> {
+    let root = args
+        .manifest_dir
+        .ok_or(anyhow::anyhow!("missing manifest directory"))?;
+    let config = I18nConfig::load(Path::new(&root))?;
+    let locales_path = find_load_path(&root, &config)?;
+    let path_pattern = format!("{}/**/*.{{yml,yaml,json,toml}}", locales_path.display());
+
+    for entry in globwalk::glob(path_pattern)? {
+        let entry = entry.unwrap().into_path();
+        if !args.inplace && entry.display().to_string().contains("-sorted") {
+            continue;
+        }
+
+        msg!(LOADING, entry.display());
+
+        let tmp_trs = rust_i18n_support::load_locale(&entry);
+        let available_locales: HashSet<_> = config
+            .available_locales
+            .iter()
+            .chain(tmp_trs.keys())
+            .collect();
+        let mut sorted_locales: Vec<&String> = available_locales.into_iter().collect();
+        sorted_locales.sort();
+
+        let keys: HashSet<_> = tmp_trs.iter().flat_map(|(_, map)| map.keys()).collect();
+        let mut sorted_keys: Vec<&String> = keys.into_iter().collect();
+        sorted_keys.sort();
+
+        if args.reverse {
+            sorted_locales.reverse();
+            sorted_keys.reverse();
+        }
+
+        let mut new_trs: IndexMap<String, IndexMap<String, String>> = IndexMap::new();
+        for key in sorted_keys {
+            let mut obj: IndexMap<String, String> = IndexMap::new();
+            for &locale in sorted_locales.iter() {
+                if let Some(msg) = tmp_trs.get(locale).and_then(|m| m.get(key)) {
+                    obj.insert(locale.clone(), msg.clone());
+                }
+            }
+            new_trs.insert(key.clone(), obj);
+        }
+
+        let ext = entry.extension().unwrap().to_string_lossy();
+        let new_path = if args.inplace {
+            entry.to_string_lossy().to_string()
+        } else {
+            let mut new_path = entry.clone();
+            new_path.set_file_name(format!(
+                "{}-sorted.{}",
+                entry.file_stem().unwrap().to_string_lossy(),
+                ext
+            ));
+            new_path.to_string_lossy().to_string()
+        };
+        let text = convert_text(&new_trs, &ext)?;
+        write_file(&new_path, &text)
+            .map_err(|err| anyhow::anyhow!(r#"sort to "{}" failed: {}"#, &new_path, err))?;
+        msg!(SORTED_TO, &new_path);
+    }
+
+    Ok(())
+}
+
+fn main() -> Result<(), Error> {
+    let result = match CargoCli::parse() {
+        CargoCli::I18n(args) => match args.cmd {
+            Some(cmd) => match cmd {
+                Commands::Export(args) => i18n_export(args),
+                Commands::Lint(args) => i18n_lint(args),
+                Commands::Sort(args) => i18n_sort(args),
+            },
+            None => i18n(args),
+        },
+    };
+
+    if let Err(err) = result {
+        msg!(ERROR, err);
         std::process::exit(1);
     }
 
