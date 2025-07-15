@@ -274,10 +274,25 @@ fn generate_code(
     let mut all_translations = Vec::<proc_macro2::TokenStream>::new();
 
     translations.iter().for_each(|(locale, trs)| {
+        let mut locale_trs = Vec::<proc_macro2::TokenStream>::new();
+
         trs.iter().for_each(|(k, v)| {
-            all_translations.push(quote! {
-                backend.add_translations(#locale, &std::collections::HashMap::from([(#k, #v)]));
+            let k = k.to_string();
+            let v = v.to_string();
+            locale_trs.push(quote! {
+                (#k, #v)
             });
+        });
+
+        let locale_trs_var_name = format!(
+            "_RUST_I18N_TRS_LOCALE_{}",
+            locale.replace(['-', '.'], "_").to_uppercase()
+        );
+        let locale_trs_var = Ident::new(&locale_trs_var_name, proc_macro2::Span::call_site());
+
+        all_translations.push(quote! {
+            const #locale_trs_var: &[(&str, &str)] = &[#(#locale_trs),*];
+            backend.extend_locale_from_slice(#locale, #locale_trs_var);
         });
     });
 
@@ -325,7 +340,7 @@ fn generate_code(
         /// [PUBLIC] This is a public API, and as an example in examples/
         #[allow(missing_docs)]
         static _RUST_I18N_BACKEND: std::sync::LazyLock<Box<dyn rust_i18n::Backend>> = std::sync::LazyLock::new(|| {
-            let mut backend = rust_i18n::SimpleBackend::new();
+            let mut backend = rust_i18n::StaticBackend::new();
             #(#all_translations)*
             #extend_code
             #default_locale
