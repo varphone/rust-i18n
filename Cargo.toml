@@ -32,6 +32,7 @@ indoc = "2.0"
 inventory = "0.3"
 itertools = "0.13"
 lazy_static = "1.0"
+log = "0.4"
 normpath = "1.0"
 once_cell = "1.0"
 proc-macro2 = { version = "1", features = ["span-locations"] }
@@ -52,6 +53,7 @@ triomphe = { version = "0.1", features = ["arc-swap"] }
 
 [dependencies]
 inventory.workspace = true
+log = { workspace = true, optional = true }
 once_cell.workspace = true
 rust-i18n-support.workspace = true
 rust-i18n-macro.workspace = true
@@ -69,7 +71,7 @@ globwalk.workspace = true
 regex.workspace = true
 
 [features]
-log-miss-tr = ["rust-i18n-macro/log-miss-tr"]
+log-miss-tr = ["dep:log", "rust-i18n-macro/log-miss-tr"]
 
 [[example]]
 name = "app"

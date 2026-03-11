@@ -2992,6 +2992,7 @@ dependencies = [
  "globwalk",
  "inventory",
  "lazy_static",
+ "log",
  "no-init-dep",
  "once_cell",
  "regex",
