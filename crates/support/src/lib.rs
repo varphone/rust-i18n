@@ -118,7 +118,7 @@ pub fn try_load_locales<F: Fn(&str) -> bool>(
         let locale = entry
             .file_stem()
             .and_then(|s| s.to_str())
-            .and_then(|s| s.split('.').last())
+            .and_then(|s| s.split('.').next_back())
             .unwrap();
 
         let ext = entry.extension().and_then(|s| s.to_str()).unwrap();
@@ -176,7 +176,7 @@ where
     let locale = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .and_then(|s| s.split('.').last())
+        .and_then(|s| s.split('.').next_back())
         .unwrap();
 
     let ext = path.extension().and_then(|s| s.to_str()).unwrap();
