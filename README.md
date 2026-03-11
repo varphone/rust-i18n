@@ -366,6 +366,32 @@ $ cargo install rust-i18n-cli
 
 After that the untranslated texts will be extracted and saved into `locales/TODO.en.yml` file.
 
+If you also want to extract texts from Cargo dependencies, you can enable the experimental dependency scan mode:
+
+```bash
+$ cargo i18n --include-deps
+```
+
+This mode resolves the Cargo dependency graph and recursively scans workspace members, local path dependencies, and registry crates that depend on `rust-i18n`. The extracted keys are still merged into the root project's `load-path`. Because it may scan third-party source trees, it can be slower and may pull dependency texts into your root locale files.
+
+If you want to keep dependency scanning limited to workspace members and local path dependencies, use:
+
+```bash
+$ cargo i18n --include-deps --local-deps-only
+```
+
+If you want to exclude specific dependency packages by Cargo package name, use:
+
+```bash
+$ cargo i18n --include-deps --exclude-package serde --exclude-package tokio
+```
+
+If you want to only scan selected dependency packages by Cargo package name, use:
+
+```bash
+$ cargo i18n --include-deps --include-package my-shared-i18n --include-package plugin-a
+```
+
 You also can special the locale by use `--locale` option:
 
 ```bash

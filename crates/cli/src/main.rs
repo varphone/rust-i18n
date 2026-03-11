@@ -6,11 +6,13 @@ use normpath::PathExt;
 use rust_i18n_extract::extractor::Message;
 use rust_i18n_extract::{extractor, generator, iter};
 use rust_i18n_support::{I18nConfig, MinifyKey};
-use std::collections::HashSet;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
-use std::{collections::HashMap, path::Path};
 
 #[derive(Parser)]
 #[command(name = "cargo")]
@@ -34,6 +36,31 @@ struct I18nArgs {
     #[command(subcommand)]
     cmd: Option<Commands>,
 
+    /// Recursively scan Cargo dependencies, including workspace members, local path
+    /// dependencies and registry crates that depend on rust-i18n.
+    #[arg(long, default_value_t = false, verbatim_doc_comment)]
+    include_deps: bool,
+
+    /// When used with --include-deps, skip registry dependencies and only scan
+    /// workspace members plus local path dependencies.
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "include_deps",
+        verbatim_doc_comment
+    )]
+    local_deps_only: bool,
+
+    /// When used with --include-deps, skip dependency packages with the given
+    /// package names. Repeat the flag or use a comma-separated list.
+    #[arg(long, value_name = "NAME", requires = "include_deps", value_delimiter = ',', num_args(1..), verbatim_doc_comment)]
+    exclude_package: Vec<String>,
+
+    /// When used with --include-deps, only scan dependency packages with the
+    /// given package names. Repeat the flag or use a comma-separated list.
+    #[arg(long, value_name = "NAME", requires = "include_deps", value_delimiter = ',', num_args(1..), verbatim_doc_comment)]
+    include_package: Vec<String>,
+
     /// Manually add a translation to the localization file.
     ///
     /// This is useful for non-literal values in the `t!` macro.
@@ -45,6 +72,7 @@ struct I18nArgs {
     /// NOTE: The whitespace before and after the key and value will be trimmed.
     #[arg(short, long, default_value = None, name = "TEXT", num_args(1..), value_parser = translate_value_parser, verbatim_doc_comment)]
     translate: Option<Vec<(String, String)>>,
+
     /// Extract all untranslated I18n texts from source code
     #[arg(default_value = "./", last = true)]
     source: Option<String>,
@@ -173,10 +201,14 @@ const ERROR_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red
 const IDENT_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 const KEY_STYLE: Style = Style::new().bold();
 const PATH_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+const WARN_STYLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 
 macro_rules! msg {
     (ERROR, $msg:expr) => {
         eprintln!("{ERROR_STYLE}rust-i18n{ERROR_STYLE:#}: {msg}", msg = $msg);
+    };
+    (WARN, $msg:expr) => {
+        eprintln!("{WARN_STYLE}rust-i18n{WARN_STYLE:#}: {msg}", msg = $msg);
     };
     (EXPORTED_TO, $path:expr) => {
         println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: exported to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
@@ -208,6 +240,39 @@ macro_rules! msg {
     (SORTED_TO, $path:expr) => {
         println!("{IDENT_STYLE}rust-i18n{IDENT_STYLE:#}: sorted to {PATH_STYLE}{}{PATH_STYLE:#}", $path);
     };
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadata {
+    packages: Vec<MetadataPackage>,
+    resolve: Option<MetadataResolve>,
+    workspace_members: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetadataPackage {
+    id: String,
+    name: String,
+    source: Option<String>,
+    manifest_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetadataResolve {
+    root: Option<String>,
+    nodes: Vec<MetadataNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetadataNode {
+    id: String,
+    dependencies: Vec<String>,
+}
+
+struct DependencyScanOptions {
+    include_registry: bool,
+    excluded_packages: HashSet<String>,
+    included_packages: Option<HashSet<String>>,
 }
 
 /// Remove quotes from a string at the start and end.
@@ -267,16 +332,276 @@ fn add_translations(
     }
 }
 
+fn path_key(path: &Path) -> String {
+    let normalized = path
+        .normalize()
+        .map(|p| p.into_path_buf())
+        .unwrap_or_else(|_| path.to_path_buf());
+    let mut key = normalized.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        key.make_ascii_lowercase();
+    }
+    key
+}
+
+fn manifest_declares_workspace(manifest_path: &Path) -> bool {
+    fs::read_to_string(manifest_path)
+        .map(|contents| contents.contains("[workspace]"))
+        .unwrap_or(false)
+}
+
+fn run_cargo_metadata(manifest_path: &Path) -> Result<CargoMetadata, Error> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let manifest_dir = manifest_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("missing manifest directory for {}", manifest_path.display())
+    })?;
+    let output = Command::new(cargo)
+        .current_dir(manifest_dir)
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(anyhow::anyhow!(
+            "failed to resolve Cargo metadata for {}: {}",
+            manifest_path.display(),
+            stderr
+        ));
+    }
+
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn seed_package_ids(
+    metadata: &CargoMetadata,
+    source_manifest_path: &Path,
+    is_workspace_manifest: bool,
+) -> Vec<String> {
+    if is_workspace_manifest && !metadata.workspace_members.is_empty() {
+        return metadata.workspace_members.clone();
+    }
+
+    let manifest_key = path_key(source_manifest_path);
+    if let Some(package) = metadata
+        .packages
+        .iter()
+        .find(|package| path_key(Path::new(&package.manifest_path)) == manifest_key)
+    {
+        return vec![package.id.clone()];
+    }
+
+    if let Some(root) = metadata
+        .resolve
+        .as_ref()
+        .and_then(|resolve| resolve.root.clone())
+    {
+        return vec![root];
+    }
+
+    metadata.workspace_members.clone()
+}
+
+fn collect_reachable_ids(
+    seeds: &HashSet<String>,
+    graph: &HashMap<String, Vec<String>>,
+) -> HashSet<String> {
+    let mut queue: VecDeque<String> = seeds.iter().cloned().collect();
+    let mut visited = HashSet::new();
+
+    while let Some(package_id) = queue.pop_front() {
+        if !visited.insert(package_id.clone()) {
+            continue;
+        }
+
+        if let Some(dependencies) = graph.get(&package_id) {
+            queue.extend(dependencies.iter().cloned());
+        }
+    }
+
+    visited
+}
+
+fn packages_reaching_targets(
+    graph: &HashMap<String, Vec<String>>,
+    targets: &HashSet<String>,
+) -> HashSet<String> {
+    let mut reverse_graph: HashMap<String, Vec<String>> = HashMap::new();
+    for (package_id, dependencies) in graph {
+        reverse_graph.entry(package_id.clone()).or_default();
+        for dependency in dependencies {
+            reverse_graph
+                .entry(dependency.clone())
+                .or_default()
+                .push(package_id.clone());
+        }
+    }
+
+    collect_reachable_ids(targets, &reverse_graph)
+}
+
+fn is_local_package(package: &MetadataPackage) -> bool {
+    package.source.is_none()
+        || matches!(package.source.as_deref(), Some(source) if source.starts_with("path+"))
+}
+
+fn should_scan_package(package: &MetadataPackage, options: &DependencyScanOptions) -> bool {
+    package.name != "rust-i18n"
+        && !options.excluded_packages.contains(&package.name)
+        && (options.include_registry || is_local_package(package))
+        && !matches!(package.source.as_deref(), Some(source) if source.starts_with("git+"))
+}
+
+fn dependency_name_is_included(package: &MetadataPackage, options: &DependencyScanOptions) -> bool {
+    options
+        .included_packages
+        .as_ref()
+        .map(|packages| packages.contains(&package.name))
+        .unwrap_or(true)
+}
+
+fn collect_scan_package_ids(
+    metadata: &CargoMetadata,
+    seed_ids: &HashSet<String>,
+    options: &DependencyScanOptions,
+) -> HashSet<String> {
+    let Some(resolve) = metadata.resolve.as_ref() else {
+        return seed_ids.clone();
+    };
+
+    let graph: HashMap<String, Vec<String>> = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.dependencies.clone()))
+        .collect();
+
+    let reachable_ids = collect_reachable_ids(seed_ids, &graph);
+    let rust_i18n_ids: HashSet<String> = metadata
+        .packages
+        .iter()
+        .filter(|package| package.name == "rust-i18n")
+        .map(|package| package.id.clone())
+        .collect();
+    let dependent_ids = if rust_i18n_ids.is_empty() {
+        HashSet::new()
+    } else {
+        packages_reaching_targets(&graph, &rust_i18n_ids)
+    };
+
+    metadata
+        .packages
+        .iter()
+        .filter(|package| reachable_ids.contains(&package.id))
+        .filter(|package| should_scan_package(package, options))
+        .filter(|package| {
+            seed_ids.contains(&package.id)
+                || (dependent_ids.contains(&package.id)
+                    && dependency_name_is_included(package, options))
+        })
+        .map(|package| package.id.clone())
+        .collect()
+}
+
+fn discover_scan_roots(
+    source_path: &str,
+    include_deps: bool,
+    options: &DependencyScanOptions,
+) -> Result<Vec<PathBuf>, Error> {
+    if !include_deps {
+        return Ok(vec![PathBuf::from(source_path)]);
+    }
+
+    let source_root = PathBuf::from(source_path);
+    let source_manifest_path = source_root.join("Cargo.toml");
+    let metadata = run_cargo_metadata(&source_manifest_path)?;
+    let seed_ids = seed_package_ids(
+        &metadata,
+        &source_manifest_path,
+        manifest_declares_workspace(&source_manifest_path),
+    );
+    let seed_ids: HashSet<String> = seed_ids.into_iter().collect();
+    let scan_ids = collect_scan_package_ids(&metadata, &seed_ids, options);
+
+    let mut seen = HashSet::new();
+    let mut scan_roots = Vec::new();
+    for package in metadata.packages {
+        if !scan_ids.contains(&package.id) {
+            continue;
+        }
+
+        let Some(root) = Path::new(&package.manifest_path).parent() else {
+            continue;
+        };
+        let root = root
+            .normalize()
+            .map(|p| p.into_path_buf())
+            .unwrap_or_else(|_| root.to_path_buf());
+        let key = path_key(&root);
+        if seen.insert(key) {
+            scan_roots.push(root);
+        }
+    }
+
+    if scan_roots.is_empty() {
+        scan_roots.push(source_root);
+    }
+
+    Ok(scan_roots)
+}
+
 fn i18n(args: I18nArgs) -> Result<(), Error> {
     let mut results = HashMap::new();
 
     let source_path = args.source.expect("Missing source path");
+    let include_deps = args.include_deps;
+    let included_packages = if args.include_package.is_empty() {
+        None
+    } else {
+        Some(args.include_package.into_iter().collect())
+    };
+    let scan_options = DependencyScanOptions {
+        include_registry: !args.local_deps_only,
+        excluded_packages: args.exclude_package.into_iter().collect(),
+        included_packages,
+    };
+    let scan_roots = discover_scan_roots(&source_path, include_deps, &scan_options)?;
+
+    if include_deps {
+        let scope = if scan_options.include_registry {
+            "including registry packages"
+        } else {
+            "local packages only"
+        };
+        let exclude_hint = if scan_options.excluded_packages.is_empty() {
+            String::new()
+        } else {
+            let mut excluded: Vec<_> = scan_options.excluded_packages.iter().cloned().collect();
+            excluded.sort();
+            format!("; excluding packages: {}", excluded.join(", "))
+        };
+        let include_hint = if let Some(included_packages) = &scan_options.included_packages {
+            let mut included: Vec<_> = included_packages.iter().cloned().collect();
+            included.sort();
+            format!("; including only packages: {}", included.join(", "))
+        } else {
+            String::new()
+        };
+        msg!(WARN, format!(
+            "--include-deps is enabled ({scope}); scanning Cargo dependencies may be slower and may merge third-party texts into the root locales output{include_hint}{exclude_hint}"
+        ));
+    }
 
     let cfg = I18nConfig::load(std::path::Path::new(&source_path))?;
 
-    iter::iter_crate(&source_path, |path, source| {
-        extractor::extract(&mut results, path, source, cfg.clone())
-    })?;
+    for scan_root in scan_roots {
+        let scan_root = scan_root.to_string_lossy().to_string();
+        iter::iter_crate(&scan_root, |path, source| {
+            extractor::extract(&mut results, path, source, cfg.clone())
+        })?;
+    }
 
     if let Some(list) = args.translate {
         add_translations(&list, &mut results, &cfg);
@@ -578,4 +903,246 @@ fn main() -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package(id: &str, name: &str, source: Option<&str>, manifest_path: &str) -> MetadataPackage {
+        MetadataPackage {
+            id: id.to_string(),
+            name: name.to_string(),
+            source: source.map(ToOwned::to_owned),
+            manifest_path: manifest_path.to_string(),
+        }
+    }
+
+    fn node(id: &str, dependencies: &[&str]) -> MetadataNode {
+        MetadataNode {
+            id: id.to_string(),
+            dependencies: dependencies
+                .iter()
+                .map(|dependency| dependency.to_string())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn test_collect_scan_package_ids_filters_to_rust_i18n_dependents() {
+        let options = DependencyScanOptions {
+            include_registry: true,
+            excluded_packages: HashSet::new(),
+            included_packages: None,
+        };
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "app", None, "/repo/app/Cargo.toml"),
+                package("shared", "shared", None, "/repo/shared/Cargo.toml"),
+                package(
+                    "serde",
+                    "serde",
+                    Some("registry+https://example.invalid"),
+                    "/registry/serde/Cargo.toml",
+                ),
+                package(
+                    "rust-i18n",
+                    "rust-i18n",
+                    Some("registry+https://example.invalid"),
+                    "/registry/rust-i18n/Cargo.toml",
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                root: Some("app".to_string()),
+                nodes: vec![
+                    node("app", &["shared", "serde"]),
+                    node("shared", &["rust-i18n"]),
+                    node("serde", &[]),
+                    node("rust-i18n", &[]),
+                ],
+            }),
+            workspace_members: vec!["app".to_string()],
+        };
+
+        let seed_ids = HashSet::from(["app".to_string()]);
+        let package_ids = collect_scan_package_ids(&metadata, &seed_ids, &options);
+
+        assert!(package_ids.contains("app"));
+        assert!(package_ids.contains("shared"));
+        assert!(!package_ids.contains("serde"));
+        assert!(!package_ids.contains("rust-i18n"));
+    }
+
+    #[test]
+    fn test_collect_scan_package_ids_excludes_git_dependencies() {
+        let options = DependencyScanOptions {
+            include_registry: true,
+            excluded_packages: HashSet::new(),
+            included_packages: None,
+        };
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "app", None, "/repo/app/Cargo.toml"),
+                package(
+                    "helper",
+                    "helper",
+                    Some("git+https://example.invalid/repo"),
+                    "/git/helper/Cargo.toml",
+                ),
+                package(
+                    "rust-i18n",
+                    "rust-i18n",
+                    Some("registry+https://example.invalid"),
+                    "/registry/rust-i18n/Cargo.toml",
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                root: Some("app".to_string()),
+                nodes: vec![
+                    node("app", &["helper"]),
+                    node("helper", &["rust-i18n"]),
+                    node("rust-i18n", &[]),
+                ],
+            }),
+            workspace_members: vec!["app".to_string()],
+        };
+
+        let seed_ids = HashSet::from(["app".to_string()]);
+        let package_ids = collect_scan_package_ids(&metadata, &seed_ids, &options);
+
+        assert!(package_ids.contains("app"));
+        assert!(!package_ids.contains("helper"));
+    }
+
+    #[test]
+    fn test_collect_scan_package_ids_skips_registry_when_local_only() {
+        let options = DependencyScanOptions {
+            include_registry: false,
+            excluded_packages: HashSet::new(),
+            included_packages: None,
+        };
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "app", None, "/repo/app/Cargo.toml"),
+                package(
+                    "registry-helper",
+                    "registry-helper",
+                    Some("registry+https://example.invalid"),
+                    "/registry/helper/Cargo.toml",
+                ),
+                package(
+                    "rust-i18n",
+                    "rust-i18n",
+                    Some("registry+https://example.invalid"),
+                    "/registry/rust-i18n/Cargo.toml",
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                root: Some("app".to_string()),
+                nodes: vec![
+                    node("app", &["registry-helper"]),
+                    node("registry-helper", &["rust-i18n"]),
+                    node("rust-i18n", &[]),
+                ],
+            }),
+            workspace_members: vec!["app".to_string()],
+        };
+
+        let seed_ids = HashSet::from(["app".to_string()]);
+        let package_ids = collect_scan_package_ids(&metadata, &seed_ids, &options);
+
+        assert!(package_ids.contains("app"));
+        assert!(!package_ids.contains("registry-helper"));
+    }
+
+    #[test]
+    fn test_collect_scan_package_ids_excludes_named_packages() {
+        let options = DependencyScanOptions {
+            include_registry: true,
+            excluded_packages: HashSet::from(["shared".to_string()]),
+            included_packages: None,
+        };
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "app", None, "/repo/app/Cargo.toml"),
+                package("shared", "shared", None, "/repo/shared/Cargo.toml"),
+                package(
+                    "rust-i18n",
+                    "rust-i18n",
+                    Some("registry+https://example.invalid"),
+                    "/registry/rust-i18n/Cargo.toml",
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                root: Some("app".to_string()),
+                nodes: vec![
+                    node("app", &["shared"]),
+                    node("shared", &["rust-i18n"]),
+                    node("rust-i18n", &[]),
+                ],
+            }),
+            workspace_members: vec!["app".to_string()],
+        };
+
+        let seed_ids = HashSet::from(["app".to_string()]);
+        let package_ids = collect_scan_package_ids(&metadata, &seed_ids, &options);
+
+        assert!(package_ids.contains("app"));
+        assert!(!package_ids.contains("shared"));
+    }
+
+    #[test]
+    fn test_collect_scan_package_ids_includes_only_named_packages() {
+        let options = DependencyScanOptions {
+            include_registry: true,
+            excluded_packages: HashSet::new(),
+            included_packages: Some(HashSet::from(["shared".to_string()])),
+        };
+        let metadata = CargoMetadata {
+            packages: vec![
+                package("app", "app", None, "/repo/app/Cargo.toml"),
+                package("shared", "shared", None, "/repo/shared/Cargo.toml"),
+                package("other", "other", None, "/repo/other/Cargo.toml"),
+                package(
+                    "rust-i18n",
+                    "rust-i18n",
+                    Some("registry+https://example.invalid"),
+                    "/registry/rust-i18n/Cargo.toml",
+                ),
+            ],
+            resolve: Some(MetadataResolve {
+                root: Some("app".to_string()),
+                nodes: vec![
+                    node("app", &["shared", "other"]),
+                    node("shared", &["rust-i18n"]),
+                    node("other", &["rust-i18n"]),
+                    node("rust-i18n", &[]),
+                ],
+            }),
+            workspace_members: vec!["app".to_string()],
+        };
+
+        let seed_ids = HashSet::from(["app".to_string()]);
+        let package_ids = collect_scan_package_ids(&metadata, &seed_ids, &options);
+
+        assert!(package_ids.contains("app"));
+        assert!(package_ids.contains("shared"));
+        assert!(!package_ids.contains("other"));
+    }
+
+    #[test]
+    fn test_seed_package_ids_uses_workspace_members_for_workspace_manifest() {
+        let metadata = CargoMetadata {
+            packages: vec![package("root", "root", None, "/repo/Cargo.toml")],
+            resolve: Some(MetadataResolve {
+                root: Some("root".to_string()),
+                nodes: vec![node("root", &[])],
+            }),
+            workspace_members: vec!["root".to_string(), "member".to_string()],
+        };
+
+        let package_ids = seed_package_ids(&metadata, Path::new("/repo/Cargo.toml"), true);
+
+        assert_eq!(package_ids, vec!["root".to_string(), "member".to_string()]);
+    }
 }

@@ -3098,6 +3098,7 @@ dependencies = [
  "normpath",
  "rust-i18n-extract",
  "rust-i18n-support",
+ "serde",
  "serde_json",
  "serde_yaml",
  "toml",
