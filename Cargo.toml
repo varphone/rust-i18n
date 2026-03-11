@@ -31,6 +31,7 @@ ignore = "0.4"
 indoc = "1"
 itertools = "0.11.0"
 lazy_static = "1"
+log = "0.4"
 normpath = "1.1.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1.0.2"
@@ -49,6 +50,7 @@ toml = "0.8.8"
 triomphe = { version = "0.1.11", features = ["arc-swap"] }
 
 [dependencies]
+log = { workspace = true, optional = true }
 rust-i18n-support.workspace = true
 rust-i18n-macro.workspace = true
 smallvec.workspace = true
@@ -64,7 +66,7 @@ globwalk.workspace = true
 regex.workspace = true
 
 [features]
-log-miss-tr = ["rust-i18n-macro/log-miss-tr"]
+log-miss-tr = ["dep:log", "rust-i18n-macro/log-miss-tr"]
 
 [[example]]
 name = "app"

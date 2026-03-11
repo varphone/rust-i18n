@@ -378,7 +378,7 @@ impl Tr {
     #[cfg(feature = "log-miss-tr")]
     fn log_missing() -> proc_macro2::TokenStream {
         quote! {
-            log::log!(target: "rust-i18n", log::Level::Warn, "missing: {} => {:?} @ {}:{}", msg_key, msg_val, file!(), line!());
+            rust_i18n::log::log!(target: "rust-i18n", rust_i18n::log::Level::Warn, "missing: {} => {:?} @ {}:{}", msg_key, msg_val, file!(), line!());
         }
     }
 

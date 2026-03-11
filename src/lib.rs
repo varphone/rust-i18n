@@ -2,6 +2,9 @@
 
 use std::{ops::Deref, sync::LazyLock};
 
+#[cfg(feature = "log-miss-tr")]
+#[doc(hidden)]
+pub use log;
 #[doc(hidden)]
 pub use rust_i18n_macro::{_minify_key, _tr, i18n};
 pub use rust_i18n_support::{
