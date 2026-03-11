@@ -32,14 +32,14 @@ Add crate dependencies in your Cargo.toml and setup I18n config:
 rust-i18n = "3"
 ```
 
-Load macro and init translations in `lib.rs` or `main.rs`:
+Initialize translations once in your top-level crate, for example in `lib.rs` or `main.rs`:
 
 ```rust,compile_fail,no_run
-// Load I18n macro, for allow you use `t!` macro in anywhere.
+// Load the macros so `t!` is available in this crate.
 #[macro_use]
 extern crate rust_i18n;
 
-// Init translations for current crate.
+// Register translations for the process.
 // This will load Configuration using the `[package.metadata.i18n]` section in `Cargo.toml` if exists.
 // Or you can pass arguments by `i18n!` to override it.
 i18n!("locales");
@@ -73,12 +73,15 @@ i18n!("locales",
 i18n!();
 ```
 
+After one crate in your process has expanded `i18n!`, any linked crate can call `t!` directly. You no longer need to repeat `i18n!` in every dependent crate.
+
 Or you can import by use directly:
 
 ```rust,no_run
-// You must import in each files when you wants use `t!` macro.
+// Import `t!` in each file where you want to use it.
 use rust_i18n::t;
 
+// Register the global provider once in the top-level crate.
 rust_i18n::i18n!("locales");
 
 fn main() {
@@ -89,6 +92,8 @@ fn main() {
     println!("{:?}", rust_i18n::available_locales!());
 }
 ```
+
+For workspace or multi-crate applications, keep `i18n!` in a shared top-level crate and let the other crates just import `t!`. See [examples/share-in-workspace](examples/share-in-workspace) for a complete example.
 
 ## Locale file
 

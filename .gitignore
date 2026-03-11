@@ -2,3 +2,6 @@ target
 debug.txt
 .idea/
 .DS_Store
+
+examples/share-in-workspace/Cargo.lock
+examples/share-in-workspace/target
