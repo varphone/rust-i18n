@@ -1,10 +1,14 @@
 #![doc = include_str!("../README.md")]
 
-use std::{ops::Deref, sync::LazyLock};
+use std::borrow::Cow;
+use std::ops::Deref;
+use std::sync::{LazyLock, OnceLock};
 
 #[cfg(feature = "log-miss-tr")]
 #[doc(hidden)]
 pub use log;
+#[doc(hidden)]
+pub use inventory;
 #[doc(hidden)]
 pub use rust_i18n_macro::{_minify_key, _tr, i18n};
 pub use rust_i18n_support::{
@@ -15,6 +19,150 @@ pub use rust_i18n_support::{
 };
 
 static CURRENT_LOCALE: LazyLock<AtomicStr> = LazyLock::new(|| AtomicStr::from("en"));
+static GLOBAL_I18N_RUNTIME: OnceLock<Option<GlobalI18nRuntime>> = OnceLock::new();
+
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct GlobalI18nOptions {
+    pub fallback: Option<&'static [&'static str]>,
+    pub minify_key: bool,
+    pub minify_key_len: usize,
+    pub minify_key_prefix: &'static str,
+    pub minify_key_thresh: usize,
+}
+
+impl Default for GlobalI18nOptions {
+    fn default() -> Self {
+        Self {
+            fallback: None,
+            minify_key: DEFAULT_MINIFY_KEY,
+            minify_key_len: DEFAULT_MINIFY_KEY_LEN,
+            minify_key_prefix: DEFAULT_MINIFY_KEY_PREFIX,
+            minify_key_thresh: DEFAULT_MINIFY_KEY_THRESH,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct GlobalI18nRegistration {
+    pub backend: fn() -> &'static dyn Backend,
+    pub options: GlobalI18nOptions,
+    pub module_path: &'static str,
+    pub is_primary_package: bool,
+}
+
+#[doc(hidden)]
+inventory::collect!(GlobalI18nRegistration);
+
+struct GlobalI18nRuntime {
+    backend: &'static dyn Backend,
+    options: GlobalI18nOptions,
+}
+
+fn is_crate_root_module(module_path: &str) -> bool {
+    !module_path.contains("::")
+}
+
+fn registration_priority(registration: &GlobalI18nRegistration) -> (u8, usize) {
+    let rank = match (
+        registration.is_primary_package,
+        is_crate_root_module(registration.module_path),
+    ) {
+        (true, true) => 3,
+        (false, true) => 2,
+        (true, false) => 1,
+        (false, false) => 0,
+    };
+
+    (rank, usize::MAX - registration.module_path.len())
+}
+
+fn global_i18n_runtime() -> Option<&'static GlobalI18nRuntime> {
+    GLOBAL_I18N_RUNTIME
+        .get_or_init(|| {
+            inventory::iter::<GlobalI18nRegistration>
+                .into_iter()
+                .max_by_key(|registration| registration_priority(registration))
+                .map(|registration| GlobalI18nRuntime {
+                    backend: (registration.backend)(),
+                    options: registration.options,
+                })
+        })
+        .as_ref()
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_lookup_fallback(locale: &str) -> Option<&str> {
+    locale
+        .rfind('-')
+        .map(|n| locale[..n].trim_end_matches("-x"))
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_global_options() -> GlobalI18nOptions {
+    global_i18n_runtime()
+        .map(|runtime| runtime.options)
+        .unwrap_or_default()
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_try_translate(locale: &str, key: impl AsRef<str>) -> Option<Cow<'static, str>> {
+    let runtime = global_i18n_runtime()?;
+    let key = key.as_ref();
+
+    runtime.backend.translate(locale, key).or_else(|| {
+        let mut current_locale = locale;
+        while let Some(fallback_locale) = _rust_i18n_lookup_fallback(current_locale) {
+            if let Some(value) = runtime.backend.translate(fallback_locale, key) {
+                return Some(value);
+            }
+            current_locale = fallback_locale;
+        }
+
+        runtime.options.fallback.and_then(|fallback| {
+            fallback
+                .iter()
+                .find_map(|locale| runtime.backend.translate(locale, key))
+        })
+    })
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_translate<'r>(locale: &str, key: &'r str) -> Cow<'r, str> {
+    _rust_i18n_try_translate(locale, key).unwrap_or_else(|| {
+        if locale.is_empty() {
+            key.into()
+        } else {
+            format!("{}.{}", locale, key).into()
+        }
+    })
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_maybe_minify_key<'r>(value: &'r str) -> Cow<'r, str> {
+    let options = _rust_i18n_global_options();
+    if options.minify_key {
+        MinifyKey::minify_key(
+            value,
+            options.minify_key_len,
+            options.minify_key_prefix,
+            options.minify_key_thresh,
+        )
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+/// Get all available locales from the selected global i18n provider.
+pub fn available_locales() -> Vec<Cow<'static, str>> {
+    if let Some(runtime) = global_i18n_runtime() {
+        let mut locales = runtime.backend.available_locales();
+        locales.sort();
+        locales
+    } else {
+        Vec::new()
+    }
+}
 
 /// Set current locale
 pub fn set_locale(locale: &str) {
@@ -94,7 +242,7 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 
 /// Get I18n text
 ///
-/// This macro forwards to the `crate::_rust_i18n_t!` macro, which is generated by the [`i18n!`] macro.
+/// This macro forwards to the global runtime, which is discovered from crates that expanded [`i18n!`].
 ///
 /// # Arguments
 ///
@@ -144,7 +292,7 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! t {
     ($($all:tt)*) => {
-        crate::_rust_i18n_t!($($all)*)
+        rust_i18n::_tr!($($all)*)
     }
 }
 
@@ -175,9 +323,11 @@ macro_rules! t {
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! tkv {
-    ($msg:literal) => {
-        crate::_rust_i18n_tkv!($msg)
-    };
+    ($msg:literal) => {{
+        let val = $msg;
+        let key = rust_i18n::_rust_i18n_maybe_minify_key(val);
+        (key, val)
+    }};
 }
 
 /// Get available locales
@@ -194,7 +344,7 @@ macro_rules! tkv {
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! available_locales {
     () => {
-        crate::_rust_i18n_available_locales()
+        rust_i18n::available_locales()
     };
 }
 

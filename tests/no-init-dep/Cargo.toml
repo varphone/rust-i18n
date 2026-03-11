@@ -1,0 +1,7 @@
+[package]
+edition = "2021"
+name = "no-init-dep"
+version = "0.1.0"
+
+[dependencies]
+rust-i18n = { path = "../.." }

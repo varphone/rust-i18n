@@ -9,6 +9,7 @@ rust_i18n::i18n!(
 
 #[cfg(test)]
 mod tests {
+    use no_init_dep;
     use rust_i18n::{t, tkv};
 
     #[test]
@@ -47,6 +48,7 @@ mod tests {
             t!("You have %{count} messages.", locale = "zh-CN", count = 1 + 2,,,),
             "你收到了 3 条新消息。"
         );
+        assert_eq!(no_init_dep::translated_literal("zh-CN"), "Bar - 你好世界！");
     }
 
     #[test]

@@ -354,6 +354,28 @@ fn generate_code(
         static _RUST_I18N_MINIFY_KEY_PREFIX: &str = #minify_key_prefix;
         static _RUST_I18N_MINIFY_KEY_THRESH: usize = #minify_key_thresh;
 
+        #[inline]
+        #[doc(hidden)]
+        #[allow(missing_docs)]
+        pub fn _rust_i18n_global_backend() -> &'static dyn rust_i18n::Backend {
+            _RUST_I18N_BACKEND.as_ref()
+        }
+
+        rust_i18n::inventory::submit! {
+            rust_i18n::GlobalI18nRegistration {
+                backend: _rust_i18n_global_backend,
+                options: rust_i18n::GlobalI18nOptions {
+                    fallback: _RUST_I18N_FALLBACK_LOCALE,
+                    minify_key: _RUST_I18N_MINIFY_KEY,
+                    minify_key_len: _RUST_I18N_MINIFY_KEY_LEN,
+                    minify_key_prefix: _RUST_I18N_MINIFY_KEY_PREFIX,
+                    minify_key_thresh: _RUST_I18N_MINIFY_KEY_THRESH,
+                },
+                module_path: module_path!(),
+                is_primary_package: option_env!("CARGO_PRIMARY_PACKAGE").is_some(),
+            }
+        }
+
         /// Lookup fallback locales
         ///
         /// For example: `"zh-Hant-CN-x-private1-private2"` -> `"zh-Hant-CN-x-private1"` -> `"zh-Hant-CN"` -> `"zh-Hant"` -> `"zh"`.
