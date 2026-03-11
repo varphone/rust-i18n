@@ -213,10 +213,23 @@ impl AsMut<Vec<Argument>> for Arguments {
 
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream) -> syn::parse::Result<Self> {
-        let args = input
-            .parse_terminated(Argument::parse, Token![,])?
-            .into_iter()
-            .collect();
+        let mut args = Vec::new();
+        while !input.is_empty() {
+            while input.peek(Token![,]) {
+                let _ = input.parse::<Token![,]>()?;
+            }
+
+            if input.is_empty() {
+                break;
+            }
+
+            args.push(input.parse::<Argument>()?);
+
+            while input.peek(Token![,]) {
+                let _ = input.parse::<Token![,]>()?;
+            }
+        }
+
         Ok(Self { args })
     }
 }
@@ -388,7 +401,7 @@ impl Tr {
     }
 
     fn into_token_stream(self) -> proc_macro2::TokenStream {
-        let (msg_key, msg_val) = if self.minify_key && self.msg.val.is_expr_lit_str() {
+        let msg_key_decl = if self.minify_key && self.msg.val.is_expr_lit_str() {
             let msg_val = self.msg.val.to_string().unwrap();
             let msg_key = MinifyKey::minify_key(
                 &msg_val,
@@ -396,24 +409,70 @@ impl Tr {
                 self.minify_key_prefix.as_str(),
                 self.minify_key_thresh,
             );
-            (quote! { #msg_key }, quote! { #msg_val })
+            quote! {
+                let msg_val = #msg_val;
+                let msg_key = #msg_key;
+            }
         } else if self.minify_key && self.msg.val.is_expr_tuple() {
-            self.msg.val.to_tupled_token_streams().unwrap()
+            let (msg_key, msg_val) = self.msg.val.to_tupled_token_streams().unwrap();
+            quote! {
+                let msg_val = #msg_val;
+                let msg_key = #msg_key;
+            }
         } else if self.minify_key {
             let minify_key_len = self.minify_key_len;
             let minify_key_prefix = self.minify_key_prefix;
             let minify_key_thresh = self.minify_key_thresh;
             let msg_val = self.msg.val.to_token_stream();
-            let msg_key = quote! { rust_i18n::MinifyKey::minify_key(&msg_val, #minify_key_len, #minify_key_prefix, #minify_key_thresh) };
-            (msg_key, msg_val)
+            quote! {
+                let msg_val = #msg_val;
+                let msg_val_ref = rust_i18n::CowStr::from(&msg_val);
+                let msg_key = rust_i18n::MinifyKey::minify_key(
+                    msg_val_ref.as_str(),
+                    #minify_key_len,
+                    #minify_key_prefix,
+                    #minify_key_thresh,
+                );
+            }
+        } else if self.msg.val.is_expr_lit_str() {
+            let msg_val = self.msg.val.to_string().unwrap();
+            quote! {
+                static MSG_KEY: rust_i18n::once_cell::sync::Lazy<std::borrow::Cow<'static, str>> = rust_i18n::once_cell::sync::Lazy::new(|| {
+                    rust_i18n::_rust_i18n_maybe_minify_key(#msg_val)
+                });
+                let msg_val = #msg_val;
+                let msg_key = MSG_KEY.clone();
+            }
+        } else if self.msg.val.is_expr_tuple() {
+            let (msg_key, msg_val) = self.msg.val.to_tupled_token_streams().unwrap();
+            quote! {
+                let msg_val = #msg_val;
+                let msg_key = #msg_key;
+            }
         } else {
             let msg_val = self.msg.val.to_token_stream();
-            let msg_key = quote! { &msg_val };
-            (msg_key, msg_val)
+            quote! {
+                let msg_val = #msg_val;
+                let msg_val_ref = rust_i18n::CowStr::from(&msg_val);
+                let msg_key = rust_i18n::_rust_i18n_maybe_minify_key(msg_val_ref.as_str());
+            }
         };
-        let locale = self.locale.map_or_else(
-            || quote! { &rust_i18n::locale() },
-            |locale| quote! { #locale },
+        let (locale_decl, locale_ref) = self.locale.map_or_else(
+            || {
+                (
+                    quote! { let locale = rust_i18n::locale(); },
+                    quote! { &*locale },
+                )
+            },
+            |locale| {
+                (
+                    quote! {
+                        let locale = #locale;
+                        let locale = rust_i18n::CowStr::from(locale);
+                    },
+                    quote! { locale.as_str() },
+                )
+            },
         );
         let keys: Vec<_> = self.args.keys().iter().map(|v| quote! { #v }).collect();
         let values: Vec<_> = self
@@ -433,9 +492,9 @@ impl Tr {
         if self.args.is_empty() {
             quote! {
                 {
-                    let msg_val = #msg_val;
-                    let msg_key = #msg_key;
-                    if let Some(translated) = crate::_rust_i18n_try_translate(#locale, &msg_key) {
+                    #locale_decl
+                    #msg_key_decl
+                    if let Some(translated) = rust_i18n::_rust_i18n_try_translate(#locale_ref, ::std::convert::AsRef::<str>::as_ref(&msg_key)) {
                         translated.into()
                     } else {
                         #logging
@@ -446,12 +505,12 @@ impl Tr {
         } else {
             quote! {
                 {
-                    let msg_val = #msg_val;
-                    let msg_key = #msg_key;
+                    #locale_decl
+                    #msg_key_decl
                     let keys = &[#(#keys),*];
                     let values = &[#(#values),*];
                     {
-                    if let Some(translated) = crate::_rust_i18n_try_translate(#locale, &msg_key) {
+                    if let Some(translated) = rust_i18n::_rust_i18n_try_translate(#locale_ref, ::std::convert::AsRef::<str>::as_ref(&msg_key)) {
                         let replaced = rust_i18n::replace_patterns(&translated, keys, values);
                         std::borrow::Cow::from(replaced)
                     } else {

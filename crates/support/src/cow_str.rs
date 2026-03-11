@@ -68,6 +68,13 @@ impl<'a> From<&&'a str> for CowStr<'a> {
     }
 }
 
+impl<'a> From<&&&'a str> for CowStr<'a> {
+    #[inline]
+    fn from(s: &&&'a str) -> Self {
+        Self(Cow::Borrowed(**s))
+    }
+}
+
 impl<'a> From<Arc<&'a str>> for CowStr<'a> {
     #[inline]
     fn from(s: Arc<&'a str>) -> Self {
@@ -93,6 +100,34 @@ impl<'a> From<&'a String> for CowStr<'a> {
     #[inline]
     fn from(s: &'a String) -> Self {
         Self(Cow::Borrowed(s))
+    }
+}
+
+impl<'a> From<&&'a String> for CowStr<'a> {
+    #[inline]
+    fn from(s: &&'a String) -> Self {
+        Self(Cow::Borrowed(*s))
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for CowStr<'a> {
+    #[inline]
+    fn from(s: Cow<'a, str>) -> Self {
+        Self(s)
+    }
+}
+
+impl<'a> From<&'a Cow<'a, str>> for CowStr<'a> {
+    #[inline]
+    fn from(s: &'a Cow<'a, str>) -> Self {
+        Self(Cow::Borrowed(s.as_ref()))
+    }
+}
+
+impl<'a> From<&&'a Cow<'a, str>> for CowStr<'a> {
+    #[inline]
+    fn from(s: &&'a Cow<'a, str>) -> Self {
+        Self(Cow::Owned(s.to_string()))
     }
 }
 

@@ -2050,6 +2050,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009ae045c87e7082cb72dab0ccd01ae075dd00141ddc108f43a0ea150a9e7227"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "io-lifetimes"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2380,6 +2389,13 @@ dependencies = [
  "cfg-if",
  "libc",
  "memoffset 0.7.1",
+]
+
+[[package]]
+name = "no-init-dep"
+version = "0.1.0"
+dependencies = [
+ "rust-i18n",
 ]
 
 [[package]]
@@ -2974,7 +2990,9 @@ dependencies = [
  "criterion",
  "foo",
  "globwalk",
+ "inventory",
  "lazy_static",
+ "no-init-dep",
  "once_cell",
  "regex",
  "rust-i18n-macro",

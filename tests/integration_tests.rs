@@ -33,6 +33,7 @@ rust_i18n::i18n!(
 
 #[cfg(test)]
 mod tests {
+    use no_init_dep;
     use rust_i18n::t;
     use rust_i18n_support::load_locales;
 
@@ -117,6 +118,23 @@ mod tests {
         assert_eq!(
             rust_i18n::available_locales!(),
             &["de", "en", "fr", "ja", "ko", "pt", "ru", "vi", "zh", "zh-CN"]
+        );
+    }
+
+    #[test]
+    fn test_t_from_dependency_without_i18n_init() {
+        rust_i18n::set_locale("en");
+        assert_eq!(no_init_dep::hello(), "Bar - Hello, World!");
+
+        rust_i18n::set_locale("zh-CN");
+        assert_eq!(no_init_dep::hello(), "Bar - 你好世界！");
+    }
+
+    #[test]
+    fn test_available_locales_from_dependency_without_i18n_init() {
+        assert_eq!(
+            no_init_dep::locales(),
+            vec!["de", "en", "fr", "ja", "ko", "pt", "ru", "vi", "zh", "zh-CN"]
         );
     }
 

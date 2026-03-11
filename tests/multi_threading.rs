@@ -3,6 +3,8 @@ use std::ops::Add;
 use std::thread::spawn;
 use std::time::{Duration, Instant};
 
+use no_init_dep;
+
 rust_i18n::i18n!("locales", fallback = "en");
 
 #[test]
@@ -25,6 +27,7 @@ fn test_load_and_store() {
         while Instant::now() < end {
             for _ in 0..100 {
                 t!("hello");
+                let _ = no_init_dep::hello();
             }
         }
     });
@@ -58,6 +61,7 @@ fn test_t_concurrent() {
                         let m = i.checked_rem(num_locales).unwrap_or_default();
                         if m == 0 {
                             t!("hello");
+                            let _ = no_init_dep::hello();
                         } else {
                             t!("hello", locale = &locales[m]);
                         }
