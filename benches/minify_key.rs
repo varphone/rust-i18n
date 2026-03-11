@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use rust_i18n::t;
+use std::hint::black_box;
 
 rust_i18n::i18n!("./tests/locales", minify_key = true, minify_key_len = 12);
 
@@ -21,7 +22,7 @@ pub fn bench_t(c: &mut Criterion) {
             let exit_loop = exit_loop.clone();
             handles.push(std::thread::spawn(move || {
                 while !exit_loop.load(std::sync::atomic::Ordering::SeqCst) {
-                    criterion::black_box(t!("hello"));
+                    black_box(t!("hello"));
                 }
             }));
         }
@@ -90,7 +91,7 @@ pub fn bench_t(c: &mut Criterion) {
 
     c.bench_function("format! (many)", |b| {
         b.iter(|| {
-            format!(
+            let _ = format!(
                 r#"Hello {name} %{surname}, your account id is {id}, email address is {email}.
         You live in {city} {zip}.
         Your website is {website}."#,

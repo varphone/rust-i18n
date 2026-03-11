@@ -9,6 +9,9 @@ use once_cell::sync::Lazy;
 
 #[doc(hidden)]
 pub use inventory;
+#[cfg(feature = "log-miss-tr")]
+#[doc(hidden)]
+pub use log;
 #[doc(hidden)]
 pub use once_cell;
 #[doc(hidden)]
@@ -196,7 +199,7 @@ pub fn set_global_provider(module_path: &'static str) -> Result<(), SetGlobalPro
 
     GLOBAL_I18N_PROVIDER_OVERRIDE
         .set(module_path)
-        .map_err(|current| SetGlobalProviderError::AlreadyOverridden(current))
+        .map_err(SetGlobalProviderError::AlreadyOverridden)
 }
 
 #[doc(hidden)]

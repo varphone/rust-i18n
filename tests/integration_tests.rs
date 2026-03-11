@@ -33,7 +33,6 @@ rust_i18n::i18n!(
 
 #[cfg(test)]
 mod tests {
-    use no_init_dep;
     use rust_i18n::t;
     use rust_i18n_support::load_locales;
 

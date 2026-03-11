@@ -1,4 +1,5 @@
 use rust_i18n::t;
+use std::hint::black_box;
 
 rust_i18n::i18n!("./tests/locales");
 
@@ -24,7 +25,7 @@ fn bench_t(c: &mut Criterion) {
             let exit_loop = exit_loop.clone();
             handles.push(std::thread::spawn(move || {
                 while !exit_loop.load(std::sync::atomic::Ordering::SeqCst) {
-                    criterion::black_box(t!("hello"));
+                    black_box(t!("hello"));
                 }
             }));
         }

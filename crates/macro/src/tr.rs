@@ -8,31 +8,37 @@ use syn::{parse::discouraged::Speculative, token::Brace, Expr, Ident, LitStr, To
 pub enum Value {
     #[default]
     Empty,
-    Expr(Expr),
+    Expr(Box<Expr>),
     Ident(Ident),
 }
 
 impl Value {
     fn is_expr_lit_str(&self) -> bool {
-        if let Self::Expr(Expr::Lit(expr_lit)) = self {
-            if let syn::Lit::Str(_) = &expr_lit.lit {
-                return true;
+        if let Self::Expr(expr) = self {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                if let syn::Lit::Str(_) = &expr_lit.lit {
+                    return true;
+                }
             }
         }
         false
     }
 
     fn is_expr_tuple(&self) -> bool {
-        if let Self::Expr(Expr::Tuple(_)) = self {
-            return true;
+        if let Self::Expr(expr) = self {
+            if let Expr::Tuple(_) = expr.as_ref() {
+                return true;
+            }
         }
         false
     }
 
     fn to_string(&self) -> Option<String> {
-        if let Self::Expr(Expr::Lit(expr_lit)) = self {
-            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                return Some(lit_str.value());
+        if let Self::Expr(expr) = self {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                    return Some(lit_str.value());
+                }
             }
         }
         None
@@ -41,11 +47,13 @@ impl Value {
     fn to_tupled_token_streams(
         &self,
     ) -> syn::parse::Result<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
-        if let Self::Expr(Expr::Tuple(expr_tuple)) = self {
-            if expr_tuple.elems.len() == 2 {
-                let first = expr_tuple.elems.first().map(|v| quote! { #v }).unwrap();
-                let last = expr_tuple.elems.last().map(|v| quote! { #v }).unwrap();
-                return Ok((first, last));
+        if let Self::Expr(expr) = self {
+            if let Expr::Tuple(expr_tuple) = expr.as_ref() {
+                if expr_tuple.elems.len() == 2 {
+                    let first = expr_tuple.elems.first().map(|v| quote! { #v }).unwrap();
+                    let last = expr_tuple.elems.last().map(|v| quote! { #v }).unwrap();
+                    return Ok((first, last));
+                }
             }
         }
         Err(syn::Error::new_spanned(
@@ -57,7 +65,7 @@ impl Value {
 
 impl From<Expr> for Value {
     fn from(expr: Expr) -> Self {
-        Self::Expr(expr)
+        Self::Expr(Box::new(expr))
     }
 }
 
@@ -71,7 +79,7 @@ impl quote::ToTokens for Value {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         match self {
             Self::Empty => {}
-            Self::Expr(expr) => match expr {
+            Self::Expr(expr) => match expr.as_ref() {
                 Expr::Path(path) => quote! { &#path }.to_tokens(tokens),
                 expr => expr.to_tokens(tokens),
             },
@@ -107,8 +115,11 @@ impl Argument {
     #[allow(dead_code)]
     pub fn value_string(&self) -> String {
         match &self.value {
-            Value::Expr(Expr::Lit(expr_lit)) => match &expr_lit.lit {
-                syn::Lit::Str(lit_str) => lit_str.value(),
+            Value::Expr(expr) => match expr.as_ref() {
+                Expr::Lit(expr_lit) => match &expr_lit.lit {
+                    syn::Lit::Str(lit_str) => lit_str.value(),
+                    _ => self.value.to_token_stream().to_string(),
+                },
                 _ => self.value.to_token_stream().to_string(),
             },
             _ => self.value.to_token_stream().to_string(),
@@ -249,7 +260,7 @@ impl Messsage {
 
         Ok(Self {
             key: Default::default(),
-            val: Value::Expr(expr),
+            val: Value::Expr(Box::new(expr)),
         })
     }
 
@@ -296,18 +307,20 @@ impl Tr {
     }
 
     fn parse_minify_key(value: &Value) -> syn::parse::Result<bool> {
-        if let Value::Expr(Expr::Lit(expr_lit)) = value {
-            match &expr_lit.lit {
-                syn::Lit::Bool(lit_bool) => {
-                    return Ok(lit_bool.value);
-                }
-                syn::Lit::Str(lit_str) => {
-                    let value = lit_str.value();
-                    if ["true", "false", "yes", "no"].contains(&value.as_str()) {
-                        return Ok(["true", "yes"].contains(&value.as_str()));
+        if let Value::Expr(expr) = value {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                match &expr_lit.lit {
+                    syn::Lit::Bool(lit_bool) => {
+                        return Ok(lit_bool.value);
                     }
+                    syn::Lit::Str(lit_str) => {
+                        let value = lit_str.value();
+                        if ["true", "false", "yes", "no"].contains(&value.as_str()) {
+                            return Ok(["true", "yes"].contains(&value.as_str()));
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         Err(syn::Error::new_spanned(
@@ -317,9 +330,11 @@ impl Tr {
     }
 
     fn parse_minify_key_len(value: &Value) -> syn::parse::Result<usize> {
-        if let Value::Expr(Expr::Lit(expr_lit)) = value {
-            if let syn::Lit::Int(lit_int) = &expr_lit.lit {
-                return Ok(lit_int.base10_parse().unwrap());
+        if let Value::Expr(expr) = value {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                if let syn::Lit::Int(lit_int) = &expr_lit.lit {
+                    return Ok(lit_int.base10_parse().unwrap());
+                }
             }
         }
         Err(syn::Error::new_spanned(
@@ -329,9 +344,11 @@ impl Tr {
     }
 
     fn parse_minify_key_prefix(value: &Value) -> syn::parse::Result<String> {
-        if let Value::Expr(Expr::Lit(expr_lit)) = value {
-            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                return Ok(lit_str.value());
+        if let Value::Expr(expr) = value {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                    return Ok(lit_str.value());
+                }
             }
         }
         Err(syn::Error::new_spanned(
@@ -341,9 +358,11 @@ impl Tr {
     }
 
     fn parse_minify_key_thresh(value: &Value) -> syn::parse::Result<usize> {
-        if let Value::Expr(Expr::Lit(expr_lit)) = value {
-            if let syn::Lit::Int(lit_int) = &expr_lit.lit {
-                return Ok(lit_int.base10_parse().unwrap());
+        if let Value::Expr(expr) = value {
+            if let Expr::Lit(expr_lit) = expr.as_ref() {
+                if let syn::Lit::Int(lit_int) = &expr_lit.lit {
+                    return Ok(lit_int.base10_parse().unwrap());
+                }
             }
         }
         Err(syn::Error::new_spanned(
@@ -391,7 +410,7 @@ impl Tr {
     #[cfg(feature = "log-miss-tr")]
     fn log_missing() -> proc_macro2::TokenStream {
         quote! {
-            log::log!(target: "rust-i18n", log::Level::Warn, "missing: {} => {:?} @ {}:{}", msg_key, msg_val, file!(), line!());
+            rust_i18n::log::log!(target: "rust-i18n", rust_i18n::log::Level::Warn, "missing: {} => {:?} @ {}:{}", msg_key, msg_val, file!(), line!());
         }
     }
 
