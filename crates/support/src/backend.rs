@@ -297,7 +297,10 @@ mod tests {
         assert_eq!(backend.translate("en", "hello"), Some(Cow::from("Hello")));
         assert_eq!(backend.translate("en", "foo"), Some(Cow::from("Foo bar")));
         assert_eq!(backend.translate("zh-CN", "hello"), Some(Cow::from("你好")));
-        assert_eq!(backend.translate("zh-CN", "foo"), Some(Cow::from("Foo 测试")));
+        assert_eq!(
+            backend.translate("zh-CN", "foo"),
+            Some(Cow::from("Foo 测试"))
+        );
 
         assert_eq!(backend.available_locales(), vec!["en", "zh-CN"]);
     }
@@ -341,6 +344,9 @@ mod tests {
 
         let combined = backend.extend(backend2);
         assert_eq!(combined.translate("en", "hello"), Some(Cow::from("Hello")));
-        assert_eq!(combined.translate("zh-TW", "hello"), Some(Cow::from("你好")));
+        assert_eq!(
+            combined.translate("zh-TW", "hello"),
+            Some(Cow::from("你好"))
+        );
     }
 }

@@ -3,8 +3,8 @@
 //!
 //! See `Manifest::from_slice`.
 
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -87,9 +87,12 @@ impl I18nConfig {
             .available_locales
             .insert(0, config.i18n.default_locale.clone());
 
-        // unqiue
-        config.i18n.available_locales =
-            config.i18n.available_locales.into_iter().unique().collect();
+        // unique while preserving the first occurrence order
+        let mut seen = HashSet::new();
+        config
+            .i18n
+            .available_locales
+            .retain(|locale| seen.insert(locale.clone()));
 
         Ok(config.i18n)
     }

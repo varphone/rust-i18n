@@ -30,8 +30,6 @@ globwalk = "0.8.1"
 ignore = "0.4"
 indoc = "1"
 inventory = "0.3"
-itertools = "0.11.0"
-lazy_static = "1"
 log = "0.4"
 normpath = "1.1.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
@@ -60,7 +58,6 @@ smallvec.workspace = true
 [dev-dependencies]
 foo.workspace = true
 criterion.workspace = true
-lazy_static.workspace = true
 no-init-dep = { path = "tests/no-init-dep" }
 serde_yaml.workspace = true
 
