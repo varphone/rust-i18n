@@ -5,17 +5,16 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::{LazyLock, OnceLock};
 
+#[doc(hidden)]
+pub use inventory;
 #[cfg(feature = "log-miss-tr")]
 #[doc(hidden)]
 pub use log;
 #[doc(hidden)]
-pub use inventory;
-#[doc(hidden)]
 pub use rust_i18n_macro::{_minify_key, _tr, i18n};
 pub use rust_i18n_support::{
     try_load_locales, AtomicStr, Backend, BackendExt, CowStr, MinifyKey, SimpleBackend,
-    StaticBackend,
-    DEFAULT_MINIFY_KEY, DEFAULT_MINIFY_KEY_LEN, DEFAULT_MINIFY_KEY_PREFIX,
+    StaticBackend, DEFAULT_MINIFY_KEY, DEFAULT_MINIFY_KEY_LEN, DEFAULT_MINIFY_KEY_PREFIX,
     DEFAULT_MINIFY_KEY_THRESH,
 };
 
