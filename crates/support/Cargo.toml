@@ -1,11 +1,11 @@
 [package]
 description = "Support for rust-i18n crate."
-edition = "2021"
-license = "MIT"
+edition = { workspace = true }
+license = { workspace = true }
 name = "rust-i18n-support"
 readme = "../../README.md"
-repository = "https://github.com/longbridge/rust-i18n"
-version = "4.0.0-preview1"
+repository = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
 arc-swap.workspace = true

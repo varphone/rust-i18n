@@ -1,11 +1,11 @@
 [package]
 description = "cargo-i18n tool for the rust-i18n crate."
-edition = "2021"
-license = "MIT"
+edition = { workspace = true }
+license = { workspace = true }
 name = "rust-i18n-cli"
 readme = "../../README.md"
-repository = "https://github.com/longbridge/rust-i18n"
-version = "4.0.0-preview1"
+repository = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
 anyhow.workspace = true
