@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::borrow::Cow;
+use std::fmt;
 use std::ops::Deref;
 use std::sync::{LazyLock, OnceLock};
 
@@ -19,6 +20,7 @@ pub use rust_i18n_support::{
 };
 
 static CURRENT_LOCALE: LazyLock<AtomicStr> = LazyLock::new(|| AtomicStr::from("en"));
+static GLOBAL_I18N_PROVIDER_OVERRIDE: OnceLock<&'static str> = OnceLock::new();
 static GLOBAL_I18N_RUNTIME: OnceLock<Option<GlobalI18nRuntime>> = OnceLock::new();
 
 #[doc(hidden)]
@@ -57,6 +59,41 @@ inventory::collect!(GlobalI18nRegistration);
 struct GlobalI18nRuntime {
     backend: &'static dyn Backend,
     options: GlobalI18nOptions,
+    module_path: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetGlobalProviderError {
+    UnknownProvider(String),
+    AlreadyInitialized(&'static str),
+    AlreadyOverridden(&'static str),
+}
+
+impl fmt::Display for SetGlobalProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownProvider(provider) => {
+                write!(f, "unknown global i18n provider: {provider}")
+            }
+            Self::AlreadyInitialized(provider) => {
+                write!(f, "global i18n provider is already initialized: {provider}")
+            }
+            Self::AlreadyOverridden(provider) => {
+                write!(
+                    f,
+                    "global i18n provider override is already set to: {provider}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetGlobalProviderError {}
+
+fn global_i18n_registrations() -> Vec<&'static GlobalI18nRegistration> {
+    inventory::iter::<GlobalI18nRegistration>
+        .into_iter()
+        .collect::<Vec<_>>()
 }
 
 fn is_crate_root_module(module_path: &str) -> bool {
@@ -77,18 +114,89 @@ fn registration_priority(registration: &GlobalI18nRegistration) -> (u8, usize) {
     (rank, usize::MAX - registration.module_path.len())
 }
 
+fn default_global_i18n_registration() -> Option<&'static GlobalI18nRegistration> {
+    global_i18n_registrations()
+        .into_iter()
+        .max_by_key(|registration| registration_priority(registration))
+}
+
+fn global_i18n_registration_by_path(module_path: &str) -> Option<&'static GlobalI18nRegistration> {
+    global_i18n_registrations()
+        .into_iter()
+        .find(|registration| registration.module_path == module_path)
+}
+
+fn selected_global_i18n_registration() -> Option<&'static GlobalI18nRegistration> {
+    GLOBAL_I18N_PROVIDER_OVERRIDE
+        .get()
+        .and_then(|module_path| global_i18n_registration_by_path(module_path))
+        .or_else(default_global_i18n_registration)
+}
+
 fn global_i18n_runtime() -> Option<&'static GlobalI18nRuntime> {
     GLOBAL_I18N_RUNTIME
         .get_or_init(|| {
-            inventory::iter::<GlobalI18nRegistration>
-                .into_iter()
-                .max_by_key(|registration| registration_priority(registration))
-                .map(|registration| GlobalI18nRuntime {
-                    backend: (registration.backend)(),
-                    options: registration.options,
-                })
+            selected_global_i18n_registration().map(|registration| GlobalI18nRuntime {
+                backend: (registration.backend)(),
+                options: registration.options,
+                module_path: registration.module_path,
+            })
         })
         .as_ref()
+}
+
+/// Return all discovered global i18n providers.
+pub fn available_global_providers() -> Vec<&'static str> {
+    let mut providers = global_i18n_registrations()
+        .into_iter()
+        .map(|registration| registration.module_path)
+        .collect::<Vec<_>>();
+    providers.sort_unstable();
+    providers.dedup();
+    providers
+}
+
+/// Return the selected global i18n provider if one has been explicitly fixed.
+pub fn global_provider() -> Option<&'static str> {
+    GLOBAL_I18N_RUNTIME
+        .get()
+        .and_then(|runtime| runtime.as_ref())
+        .map(|runtime| runtime.module_path)
+        .or_else(|| GLOBAL_I18N_PROVIDER_OVERRIDE.get().copied())
+}
+
+/// Override the global i18n provider before the runtime is first used.
+pub fn set_global_provider(module_path: &'static str) -> Result<(), SetGlobalProviderError> {
+    if let Some(runtime) = GLOBAL_I18N_RUNTIME
+        .get()
+        .and_then(|runtime| runtime.as_ref())
+    {
+        return if runtime.module_path == module_path {
+            Ok(())
+        } else {
+            Err(SetGlobalProviderError::AlreadyInitialized(
+                runtime.module_path,
+            ))
+        };
+    }
+
+    if global_i18n_registration_by_path(module_path).is_none() {
+        return Err(SetGlobalProviderError::UnknownProvider(
+            module_path.to_string(),
+        ));
+    }
+
+    if let Some(current) = GLOBAL_I18N_PROVIDER_OVERRIDE.get() {
+        return if *current == module_path {
+            Ok(())
+        } else {
+            Err(SetGlobalProviderError::AlreadyOverridden(current))
+        };
+    }
+
+    GLOBAL_I18N_PROVIDER_OVERRIDE
+        .set(module_path)
+        .map_err(|current| SetGlobalProviderError::AlreadyOverridden(current))
 }
 
 #[doc(hidden)]
