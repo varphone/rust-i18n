@@ -39,9 +39,17 @@ fn convert_text(trs: &Translations, format: &str) -> String {
     let mut value = serde_json::Value::Object(serde_json::Map::new());
     value["_version"] = serde_json::Value::Number(serde_json::Number::from(2));
 
-    for (key, val) in trs {
+    let mut keys = trs.keys().collect::<Vec<_>>();
+    keys.sort();
+
+    for key in keys {
+        let val = trs.get(key).unwrap();
         let mut obj = serde_json::Value::Object(serde_json::Map::new());
-        for (locale, text) in val {
+        let mut locales = val.keys().collect::<Vec<_>>();
+        locales.sort();
+
+        for locale in locales {
+            let text = val.get(locale).unwrap();
             obj[locale] = serde_json::Value::String(text.clone());
         }
         value[key] = obj;
@@ -50,7 +58,7 @@ fn convert_text(trs: &Translations, format: &str) -> String {
     match format {
         "json" => serde_json::to_string_pretty(&value).unwrap(),
         "yaml" | "yml" => {
-            let text = serde_yaml::to_string(&value).unwrap();
+            let text = serde_saphyr::to_string(&value).unwrap();
             // Remove leading `---`
             text.trim_start_matches("---").trim_start().to_string()
         }
@@ -106,7 +114,7 @@ fn generate_result<'a, P: AsRef<Path>>(
     trs
 }
 
-fn write_file<P: AsRef<Path>>(output: &P, filename: &str, data: &str) -> Result<()> {
+pub fn write_file<P: AsRef<Path>>(output: &P, filename: &str, data: &str) -> Result<()> {
     let output_file = std::path::Path::new(output.as_ref()).join(String::from(filename));
     let folder = output_file.parent().unwrap();
 

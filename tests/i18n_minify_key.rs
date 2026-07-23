@@ -47,6 +47,7 @@ mod tests {
             t!("You have %{count} messages.", locale = "zh-CN", count = 1 + 2,,,),
             "你收到了 3 条新消息。"
         );
+        assert_eq!(no_init_dep::translated_literal("zh-CN"), "Bar - 你好世界！");
     }
 
     #[test]

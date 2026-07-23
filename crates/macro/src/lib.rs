@@ -383,6 +383,65 @@ fn generate_code(
         static _RUST_I18N_MINIFY_KEY_PREFIX: &str = #minify_key_prefix;
         static _RUST_I18N_MINIFY_KEY_THRESH: usize = #minify_key_thresh;
 
+        struct RustI18nGlobalBackend;
+
+        impl rust_i18n::Backend for RustI18nGlobalBackend {
+            fn available_locales(&self) -> Vec<std::borrow::Cow<'_, str>> {
+                _rust_i18n_available_locales()
+            }
+
+            fn translate(&self, locale: &str, key: &str) -> Option<std::borrow::Cow<'_, str>> {
+                _rust_i18n_backend_translate(locale, key)
+            }
+
+            fn messages_for_locale(&self, locale: &str) -> Option<Vec<(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)>> {
+                match (
+                    _RUST_I18N_EXTENSION
+                        .get()
+                        .and_then(|backend| backend.messages_for_locale(locale)),
+                    _RUST_I18N_BACKEND.messages_for_locale(locale),
+                ) {
+                    (None, None) => None,
+                    (None, messages) => messages,
+                    (messages, None) => messages,
+                    (Some(extension), Some(base)) => Some(
+                        extension
+                            .into_iter()
+                            .chain(base.into_iter().filter(|(key, _)| {
+                                _RUST_I18N_EXTENSION
+                                    .get()
+                                    .is_none_or(|backend| backend.translate(locale, key).is_none())
+                            }))
+                            .collect(),
+                    ),
+                }
+            }
+        }
+
+        static _RUST_I18N_GLOBAL_BACKEND: RustI18nGlobalBackend = RustI18nGlobalBackend;
+
+        #[inline]
+        #[doc(hidden)]
+        #[allow(missing_docs)]
+        pub fn _rust_i18n_global_backend() -> &'static dyn rust_i18n::Backend {
+            &_RUST_I18N_GLOBAL_BACKEND
+        }
+
+        rust_i18n::inventory::submit! {
+            rust_i18n::GlobalI18nRegistration {
+                backend: _rust_i18n_global_backend,
+                options: rust_i18n::GlobalI18nOptions {
+                    fallback: _RUST_I18N_FALLBACK_LOCALE,
+                    minify_key: _RUST_I18N_MINIFY_KEY,
+                    minify_key_len: _RUST_I18N_MINIFY_KEY_LEN,
+                    minify_key_prefix: _RUST_I18N_MINIFY_KEY_PREFIX,
+                    minify_key_thresh: _RUST_I18N_MINIFY_KEY_THRESH,
+                },
+                module_path: module_path!(),
+                is_primary_package: option_env!("CARGO_PRIMARY_PACKAGE").is_some(),
+            }
+        }
+
         /// Lookup fallback locales
         ///
         /// For example: `"zh-Hant-CN-x-private1-private2"` -> `"zh-Hant-CN-x-private1"` -> `"zh-Hant-CN"` -> `"zh-Hant"` -> `"zh"`.

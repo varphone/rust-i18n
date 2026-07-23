@@ -1,7 +1,15 @@
 #![doc = include_str!("../README.md")]
 
-use std::{ops::Deref, sync::LazyLock};
+use std::borrow::Cow;
+use std::fmt;
+use std::ops::Deref;
+use std::sync::{LazyLock, OnceLock};
 
+#[doc(hidden)]
+pub use inventory;
+#[cfg(feature = "log-miss-tr")]
+#[doc(hidden)]
+pub use log;
 #[doc(hidden)]
 pub use rust_i18n_macro::{_minify_key, _tr, i18n};
 #[cfg(feature = "load-path")]
@@ -13,6 +21,298 @@ pub use rust_i18n_support::{
 };
 
 static CURRENT_LOCALE: LazyLock<AtomicStr> = LazyLock::new(|| AtomicStr::from("en"));
+static GLOBAL_I18N_PROVIDER_OVERRIDE: OnceLock<&'static str> = OnceLock::new();
+static GLOBAL_I18N_RUNTIME: OnceLock<Option<GlobalI18nRuntime>> = OnceLock::new();
+
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct GlobalI18nOptions {
+    pub fallback: Option<&'static [&'static str]>,
+    pub minify_key: bool,
+    pub minify_key_len: usize,
+    pub minify_key_prefix: &'static str,
+    pub minify_key_thresh: usize,
+}
+
+impl Default for GlobalI18nOptions {
+    fn default() -> Self {
+        Self {
+            fallback: None,
+            minify_key: DEFAULT_MINIFY_KEY,
+            minify_key_len: DEFAULT_MINIFY_KEY_LEN,
+            minify_key_prefix: DEFAULT_MINIFY_KEY_PREFIX,
+            minify_key_thresh: DEFAULT_MINIFY_KEY_THRESH,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct GlobalI18nRegistration {
+    pub backend: fn() -> &'static dyn Backend,
+    pub options: GlobalI18nOptions,
+    pub module_path: &'static str,
+    pub is_primary_package: bool,
+}
+
+#[doc(hidden)]
+inventory::collect!(GlobalI18nRegistration);
+
+struct GlobalI18nRuntime {
+    backend: &'static dyn Backend,
+    options: GlobalI18nOptions,
+    module_path: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetGlobalProviderError {
+    UnknownProvider(String),
+    AlreadyInitialized(&'static str),
+    AlreadyOverridden(&'static str),
+}
+
+impl fmt::Display for SetGlobalProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownProvider(provider) => {
+                write!(f, "unknown global i18n provider: {provider}")
+            }
+            Self::AlreadyInitialized(provider) => {
+                write!(f, "global i18n provider is already initialized: {provider}")
+            }
+            Self::AlreadyOverridden(provider) => {
+                write!(
+                    f,
+                    "global i18n provider override is already set to: {provider}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetGlobalProviderError {}
+
+fn global_i18n_registrations() -> Vec<&'static GlobalI18nRegistration> {
+    inventory::iter::<GlobalI18nRegistration>
+        .into_iter()
+        .collect::<Vec<_>>()
+}
+
+fn is_crate_root_module(module_path: &str) -> bool {
+    !module_path.contains("::")
+}
+
+fn registration_priority(registration: &GlobalI18nRegistration) -> (u8, usize) {
+    let rank = match (
+        registration.is_primary_package,
+        is_crate_root_module(registration.module_path),
+    ) {
+        (true, true) => 3,
+        (false, true) => 2,
+        (true, false) => 1,
+        (false, false) => 0,
+    };
+
+    (rank, usize::MAX - registration.module_path.len())
+}
+
+fn default_global_i18n_registration() -> Option<&'static GlobalI18nRegistration> {
+    global_i18n_registrations()
+        .into_iter()
+        .max_by_key(|registration| registration_priority(registration))
+}
+
+fn global_i18n_registration_by_path(module_path: &str) -> Option<&'static GlobalI18nRegistration> {
+    global_i18n_registrations()
+        .into_iter()
+        .find(|registration| registration.module_path == module_path)
+}
+
+fn selected_global_i18n_registration() -> Option<&'static GlobalI18nRegistration> {
+    GLOBAL_I18N_PROVIDER_OVERRIDE
+        .get()
+        .and_then(|module_path| global_i18n_registration_by_path(module_path))
+        .or_else(default_global_i18n_registration)
+}
+
+fn global_i18n_runtime() -> Option<&'static GlobalI18nRuntime> {
+    GLOBAL_I18N_RUNTIME
+        .get_or_init(|| {
+            selected_global_i18n_registration().map(|registration| GlobalI18nRuntime {
+                backend: (registration.backend)(),
+                options: registration.options,
+                module_path: registration.module_path,
+            })
+        })
+        .as_ref()
+}
+
+/// Return all discovered global i18n providers.
+pub fn available_global_providers() -> Vec<&'static str> {
+    let mut providers = global_i18n_registrations()
+        .into_iter()
+        .map(|registration| registration.module_path)
+        .collect::<Vec<_>>();
+    providers.sort_unstable();
+    providers.dedup();
+    providers
+}
+
+/// Return the selected global i18n provider if one has been explicitly fixed.
+pub fn global_provider() -> Option<&'static str> {
+    GLOBAL_I18N_RUNTIME
+        .get()
+        .and_then(|runtime| runtime.as_ref())
+        .map(|runtime| runtime.module_path)
+        .or_else(|| GLOBAL_I18N_PROVIDER_OVERRIDE.get().copied())
+}
+
+/// Override the global i18n provider before the runtime is first used.
+pub fn set_global_provider(module_path: &'static str) -> Result<(), SetGlobalProviderError> {
+    if let Some(runtime) = GLOBAL_I18N_RUNTIME
+        .get()
+        .and_then(|runtime| runtime.as_ref())
+    {
+        return if runtime.module_path == module_path {
+            Ok(())
+        } else {
+            Err(SetGlobalProviderError::AlreadyInitialized(
+                runtime.module_path,
+            ))
+        };
+    }
+
+    if global_i18n_registration_by_path(module_path).is_none() {
+        return Err(SetGlobalProviderError::UnknownProvider(
+            module_path.to_string(),
+        ));
+    }
+
+    if let Some(current) = GLOBAL_I18N_PROVIDER_OVERRIDE.get() {
+        return if *current == module_path {
+            Ok(())
+        } else {
+            Err(SetGlobalProviderError::AlreadyOverridden(current))
+        };
+    }
+
+    GLOBAL_I18N_PROVIDER_OVERRIDE
+        .set(module_path)
+        .map_err(SetGlobalProviderError::AlreadyOverridden)
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_lookup_fallback(locale: &str) -> Option<&str> {
+    locale
+        .rfind('-')
+        .map(|n| locale[..n].trim_end_matches("-x"))
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_global_options() -> GlobalI18nOptions {
+    global_i18n_runtime()
+        .map(|runtime| runtime.options)
+        .unwrap_or_default()
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_try_translate(locale: &str, key: impl AsRef<str>) -> Option<Cow<'static, str>> {
+    let runtime = global_i18n_runtime()?;
+    let key = key.as_ref();
+
+    runtime.backend.translate(locale, key).or_else(|| {
+        let mut current_locale = locale;
+        while let Some(fallback_locale) = _rust_i18n_lookup_fallback(current_locale) {
+            if let Some(value) = runtime.backend.translate(fallback_locale, key) {
+                return Some(value);
+            }
+            current_locale = fallback_locale;
+        }
+
+        runtime.options.fallback.and_then(|fallback| {
+            fallback
+                .iter()
+                .find_map(|locale| runtime.backend.translate(locale, key))
+        })
+    })
+}
+
+/// Look up a translation using the backend registered by the calling crate.
+/// Falls back to the selected global provider when the caller has no backend.
+#[doc(hidden)]
+pub fn _rust_i18n_try_translate_from(
+    module_path: &str,
+    locale: &str,
+    key: impl AsRef<str>,
+) -> Option<Cow<'static, str>> {
+    let registration = global_i18n_registrations()
+        .into_iter()
+        .filter(|registration| {
+            module_path == registration.module_path
+                || module_path
+                    .strip_prefix(registration.module_path)
+                    .is_some_and(|suffix| suffix.starts_with("::"))
+        })
+        .max_by_key(|registration| registration.module_path.len());
+
+    let Some(registration) = registration else {
+        return _rust_i18n_try_translate(locale, key);
+    };
+
+    let backend = (registration.backend)();
+    let key = key.as_ref();
+    backend.translate(locale, key).or_else(|| {
+        let mut current_locale = locale;
+        while let Some(fallback_locale) = _rust_i18n_lookup_fallback(current_locale) {
+            if let Some(value) = backend.translate(fallback_locale, key) {
+                return Some(value);
+            }
+            current_locale = fallback_locale;
+        }
+
+        registration.options.fallback.and_then(|fallback| {
+            fallback
+                .iter()
+                .find_map(|locale| backend.translate(locale, key))
+        })
+    })
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_translate<'r>(locale: &str, key: &'r str) -> Cow<'r, str> {
+    _rust_i18n_try_translate(locale, key).unwrap_or_else(|| {
+        if locale.is_empty() {
+            key.into()
+        } else {
+            format!("{}.{}", locale, key).into()
+        }
+    })
+}
+
+#[doc(hidden)]
+pub fn _rust_i18n_maybe_minify_key<'r>(value: &'r str) -> Cow<'r, str> {
+    let options = _rust_i18n_global_options();
+    if options.minify_key {
+        MinifyKey::minify_key(
+            value,
+            options.minify_key_len,
+            options.minify_key_prefix,
+            options.minify_key_thresh,
+        )
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+/// Get all available locales from the selected global i18n provider.
+pub fn available_locales() -> Vec<Cow<'static, str>> {
+    if let Some(runtime) = global_i18n_runtime() {
+        let mut locales = runtime.backend.available_locales();
+        locales.sort();
+        locales
+    } else {
+        Vec::new()
+    }
+}
 
 /// Set current locale
 pub fn set_locale(locale: &str) {
@@ -92,7 +392,7 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 
 /// Get I18n text
 ///
-/// This macro forwards to the `crate::_rust_i18n_t!` macro, which is generated by the [`i18n!`] macro.
+/// This macro forwards to the global runtime, which is discovered from crates that expanded [`i18n!`].
 ///
 /// # Arguments
 ///
@@ -103,6 +403,7 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 ///   - Dynamic messages are also supported, such as `t!(format!("Hello, {}!", name))`.
 ///     However, if `minify_key` is enabled, the entire message will be hashed and used as a key for every lookup, which may consume more CPU cycles.
 /// * `locale` - The locale to use. If not specified, the current locale will be used.
+/// * `domain` - An optional namespace prepended to the translation key. It can be a string literal or a runtime string expression.
 /// * `args` - The arguments to be replaced in the translated text.
 ///    - These should be passed in the format `key = value` or `key => value`.
 ///    - Alternatively, you can specify the value format using the `key = value : {:format_specifier}` syntax.
@@ -123,6 +424,10 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 /// t!("greeting", locale = "de");
 /// // greeting: "Hallo Welt!" => "Hallo Welt!"
 ///
+/// // Look up a key below a namespace.
+/// t!("title", domain = "my_component");
+/// // => looks up "my_component.title"
+///
 /// // With variables
 /// t!("messages.hello", name = "world");
 /// // messages.hello: "Hello, %{name}" => "Hello, world"
@@ -142,7 +447,7 @@ pub fn replace_patterns(input: &str, patterns: &[&str], values: &[String]) -> St
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! t {
     ($($all:tt)*) => {
-        crate::_rust_i18n_t!($($all)*)
+        rust_i18n::_tr!($($all)*)
     }
 }
 
@@ -173,9 +478,11 @@ macro_rules! t {
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! tkv {
-    ($msg:literal) => {
-        crate::_rust_i18n_tkv!($msg)
-    };
+    ($msg:literal) => {{
+        let val = $msg;
+        let key = rust_i18n::_rust_i18n_maybe_minify_key(val);
+        (key, val)
+    }};
 }
 
 /// Get available locales
@@ -192,7 +499,7 @@ macro_rules! tkv {
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! available_locales {
     () => {
-        crate::_rust_i18n_available_locales()
+        rust_i18n::available_locales()
     };
 }
 

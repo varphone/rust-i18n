@@ -3,7 +3,7 @@ authors = ["Jason Lee <huacnlee@gmail.com>"]
 build = "build.rs"
 categories = ["localization", "internationalization"]
 description = "Rust I18n is use Rust codegen for load YAML file storage translations on compile time, and give you a t! macro for simply get translation texts."
-edition = "2021"
+edition = { workspace = true }
 exclude = ["crates", "tests"]
 keywords = [
     "gettext",
@@ -12,9 +12,15 @@ keywords = [
     "localization",
     "translation",
 ]
-license = "MIT"
+license = { workspace = true }
 name = "rust-i18n"
 readme = "README.md"
+repository = { workspace = true }
+version = { workspace = true }
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
 repository = "https://github.com/longbridge/rust-i18n"
 version = "4.2.1"
 
@@ -23,14 +29,14 @@ anyhow = "1"
 arc-swap = "1.6.0"
 base62 = "2.0.2"
 clap = { version = "4.1.14", features = ["derive"] }
-criterion = "0.5"
+criterion = "0.8.2"
 foo = { path = "examples/foo" }
 glob = "0.3"
-globwalk = "0.8.1"
+globwalk = "0.9.1"
 ignore = "0.4"
-indoc = "1"
-itertools = "0.11.0"
-lazy_static = "1"
+indoc = "2.0.7"
+inventory = "0.3"
+log = "0.4"
 normpath = "1.1.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1.0.2"
@@ -42,27 +48,29 @@ rust-i18n-support = { path = "./crates/support", version = "4.2.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-saphyr = "0.0.29"
-serde_yaml = "0.9.33"
+# serde_yaml = "0.9.33"
 siphasher = "1.0"
 smallvec = "1.12.0"
-syn = { version = "2.0.18", features = ["full", "extra-traits"] }
-toml = "0.8.8"
+syn = { version = "3.0", features = ["full", "extra-traits"] }
+toml = "1.0"
 triomphe = { version = "0.1.11", features = ["arc-swap"] }
 
 [dependencies]
+log = { workspace = true, optional = true }
+inventory.workspace = true
 rust-i18n-support.workspace = true
 rust-i18n-macro.workspace = true
 smallvec.workspace = true
 
 [features]
-log-miss-tr = ["rust-i18n-macro/log-miss-tr"]
+log-miss-tr = ["dep:log", "rust-i18n-macro/log-miss-tr"]
 load-path = ["rust-i18n-support/codegen"]
 
 [dev-dependencies]
 foo.workspace = true
 criterion.workspace = true
-lazy_static.workspace = true
-serde_yaml.workspace = true
+no-init-dep = { path = "tests/no-init-dep" }
+serde-saphyr.workspace = true
 rust-i18n-support = { path = "./crates/support", version = "4.2.1", features = ["codegen"] }
 
 [build-dependencies]

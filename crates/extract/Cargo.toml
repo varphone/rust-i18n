@@ -1,11 +1,11 @@
 [package]
 description = "Extractor for rust-i18n crate."
-edition = "2021"
-license = "MIT"
+edition = { workspace = true }
+license = { workspace = true }
 name = "rust-i18n-extract"
 readme = "../../README.md"
-repository = "https://github.com/longbridge/rust-i18n"
-version = "4.2.1"
+repository = { workspace = true }
+version = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -17,8 +17,8 @@ quote.workspace = true
 regex.workspace = true
 rust-i18n-support = { workspace = true, features = ["codegen"] }
 serde.workspace = true
+serde-saphyr.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 syn.workspace = true
 toml.workspace = true
 

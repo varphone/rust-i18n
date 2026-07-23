@@ -41,7 +41,24 @@ pub fn extract(
     source: &str,
     cfg: I18nConfig,
 ) -> Result<(), Error> {
-    let mut ex = Extractor { results, path, cfg };
+    extract_with_namespace(results, path, source, cfg, None)
+}
+
+/// Extract translation calls with an optional key namespace.
+#[allow(clippy::ptr_arg)]
+pub fn extract_with_namespace(
+    results: &mut Results,
+    path: &PathBuf,
+    source: &str,
+    cfg: I18nConfig,
+    namespace: Option<&str>,
+) -> Result<(), Error> {
+    let mut ex = Extractor {
+        results,
+        path,
+        cfg,
+        namespace: namespace.map(str::to_owned),
+    };
 
     let file = syn::parse_file(source)
         .unwrap_or_else(|_| panic!("Failed to parse file, file: {}", path.display()));
@@ -49,11 +66,53 @@ pub fn extract(
     ex.invoke(stream)
 }
 
+/// Return dependency aliases passed to extend! invocations in the source.
+pub fn extend_targets(source: &str) -> Vec<String> {
+    let Ok(file) = syn::parse_file(source) else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    collect_extend_targets(file.into_token_stream(), &mut targets);
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn collect_extend_targets(stream: TokenStream, targets: &mut Vec<String>) {
+    let mut token_iter = stream.into_iter().peekable();
+
+    while let Some(token) = token_iter.next() {
+        match token {
+            TokenTree::Group(group) => collect_extend_targets(group.stream(), targets),
+            TokenTree::Ident(ident) => {
+                let is_macro = matches!(
+                    token_iter.peek(),
+                    Some(TokenTree::Punct(punct)) if punct.as_char() == '!'
+                );
+                if is_macro {
+                    token_iter.next();
+                }
+
+                if ident == "extend" && is_macro {
+                    if let Some(TokenTree::Group(group)) = token_iter.peek() {
+                        if let Some(TokenTree::Ident(target)) = group.stream().into_iter().next() {
+                            targets.push(target.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 #[allow(dead_code)]
 struct Extractor<'a> {
     results: &'a mut Results,
     path: &'a PathBuf,
     cfg: I18nConfig,
+    namespace: Option<String>,
 }
 
 impl<'a> Extractor<'a> {
@@ -95,6 +154,25 @@ impl<'a> Extractor<'a> {
             return;
         };
 
+        let mut domain = None;
+        while let Some(token) = token_iter.next() {
+            let TokenTree::Ident(name) = token else {
+                continue;
+            };
+            if name != "domain" {
+                continue;
+            }
+            let Some(TokenTree::Punct(separator)) = token_iter.next() else {
+                continue;
+            };
+            if separator.as_char() != '=' {
+                continue;
+            }
+            if let Some(TokenTree::Literal(value)) = token_iter.next() {
+                domain = literal_to_string(&value);
+            }
+        }
+
         let I18nConfig {
             minify_key,
             minify_key_len,
@@ -118,6 +196,15 @@ impl<'a> Extractor<'a> {
                     let message_key = format_message_key(&key);
                     (message_key.clone(), message_key)
                 };
+                let message_key = domain
+                    .as_deref()
+                    .map(|domain| format!("{domain}.{message_key}"))
+                    .unwrap_or(message_key);
+                let message_key = self
+                    .namespace
+                    .as_deref()
+                    .map(|namespace| format!("{namespace}.{message_key}"))
+                    .unwrap_or(message_key);
                 let index = self.results.len();
                 let message = self
                     .results
@@ -214,6 +301,20 @@ mod tests {
     }
 
     #[test]
+    fn extracts_literal_domain() {
+        let mut results = HashMap::new();
+        extract(
+            &mut results,
+            &PathBuf::from("domain.rs"),
+            "fn view() { t!(\"title\", domain = \"component\"); }",
+            I18nConfig::default(),
+        )
+        .unwrap();
+
+        assert!(results.contains_key("component.title"));
+    }
+
+    #[test]
     fn test_extract() {
         let source = include_str!("example.test.rs");
         let stream = proc_macro2::TokenStream::from_str(source).unwrap();
@@ -240,6 +341,7 @@ mod tests {
             results: &mut results,
             path: &"hello.rs".to_owned().into(),
             cfg: I18nConfig::default(),
+            namespace: None,
         };
 
         ex.invoke(stream).unwrap();

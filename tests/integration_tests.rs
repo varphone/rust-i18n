@@ -8,6 +8,7 @@ impl TestBackend {
     fn new() -> Self {
         let mut trs = HashMap::new();
         trs.insert("foo".into(), "pt-fake.foo".to_string());
+        trs.insert("component.foo".into(), "pt-fake.component.foo".to_string());
         Self { trs }
     }
 }
@@ -118,6 +119,20 @@ mod tests {
     }
 
     #[test]
+    fn test_domain() {
+        assert_eq!(
+            t!("foo", locale = "pt", domain = "component"),
+            "pt-fake.component.foo"
+        );
+
+        let domain = "component".to_string();
+        assert_eq!(
+            t!("foo", locale = "pt", domain = domain),
+            "pt-fake.component.foo"
+        );
+    }
+
+    #[test]
     fn test_translate() {
         assert_eq!(
             crate::_rust_i18n_translate("en", "hello"),
@@ -130,6 +145,23 @@ mod tests {
         assert_eq!(
             rust_i18n::available_locales!(),
             &["de", "en", "fr", "ja", "ko", "pt", "ru", "vi", "zh", "zh-CN"]
+        );
+    }
+
+    #[test]
+    fn test_t_from_dependency_without_i18n_init() {
+        rust_i18n::set_locale("en");
+        assert_eq!(no_init_dep::hello(), "Bar - Hello, World!");
+
+        rust_i18n::set_locale("zh-CN");
+        assert_eq!(no_init_dep::hello(), "Bar - 你好世界！");
+    }
+
+    #[test]
+    fn test_available_locales_from_dependency_without_i18n_init() {
+        assert_eq!(
+            no_init_dep::locales(),
+            vec!["de", "en", "fr", "ja", "ko", "pt", "ru", "vi", "zh", "zh-CN"]
         );
     }
 

@@ -163,8 +163,28 @@ impl SimpleBackend {
         locale: Cow<'static, str>,
         data: HashMap<Cow<'static, str>, Cow<'static, str>>,
     ) {
-        let trs = self.translations.entry(locale.into()).or_default();
+        let trs = self.translations.entry(locale).or_default();
         trs.extend(data);
+    }
+
+    /// Add more translations for the given locale from a key-value pair iterator.
+    pub fn extend_locale_from_iter<'r, I>(&mut self, locale: Cow<'static, str>, iter: I)
+    where
+        I: Iterator<Item = &'r (Cow<'static, str>, Cow<'static, str>)>,
+    {
+        let trs = self.translations.entry(locale).or_default();
+        for (k, v) in iter {
+            trs.insert(k.clone(), v.clone());
+        }
+    }
+
+    /// Add more translations for the given locale from a key-value pair slice.
+    pub fn extend_locale_from_slice(
+        &mut self,
+        locale: Cow<'static, str>,
+        data: &[(Cow<'static, str>, Cow<'static, str>)],
+    ) {
+        self.extend_locale_from_iter(locale, data.iter());
     }
 }
 
@@ -203,8 +223,7 @@ mod tests {
     use std::borrow::Cow;
     use std::collections::HashMap;
 
-    use super::SimpleBackend;
-    use super::{Backend, BackendExt, NamespacedBackend};
+    use super::{Backend, BackendExt, NamespacedBackend, SimpleBackend};
 
     #[test]
     fn test_simple_backend() {
@@ -260,6 +279,31 @@ mod tests {
         );
 
         assert_eq!(combined.available_locales(), vec!["en", "zh-CN"]);
+
+        let mut backend = SimpleBackend::new();
+        backend.extend_locale_from_slice(
+            "en".into(),
+            &[
+                ("hello".into(), "Hello".into()),
+                ("foo".into(), "Foo bar".into()),
+            ],
+        );
+
+        let mut backend2 = SimpleBackend::new();
+        backend2.extend_locale_from_slice(
+            "zh-TW".into(),
+            &[
+                ("hello".into(), "你好".into()),
+                ("foo".into(), "Foo 测试".into()),
+            ],
+        );
+
+        let combined = backend.extend(backend2);
+        assert_eq!(combined.translate("en", "hello"), Some(Cow::from("Hello")));
+        assert_eq!(
+            combined.translate("zh-TW", "hello"),
+            Some(Cow::from("你好"))
+        );
     }
 
     #[test]

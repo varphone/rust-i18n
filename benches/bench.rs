@@ -1,15 +1,13 @@
 use rust_i18n::t;
+use std::hint::black_box;
+use std::sync::LazyLock;
 
 rust_i18n::i18n!("./tests/locales");
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-lazy_static::lazy_static! {
-pub static ref DICT: std::collections::HashMap<&'static str, &'static str> =
-    [
-        ("hello", "Bar - Hello, World!"),
-    ].iter().cloned().collect();
-}
+pub static DICT: LazyLock<std::collections::HashMap<&'static str, &'static str>> =
+    LazyLock::new(|| [("hello", "Bar - Hello, World!")].iter().cloned().collect());
 
 fn bench_t(c: &mut Criterion) {
     // 102 ns
@@ -24,7 +22,7 @@ fn bench_t(c: &mut Criterion) {
             let exit_loop = exit_loop.clone();
             handles.push(std::thread::spawn(move || {
                 while !exit_loop.load(std::sync::atomic::Ordering::SeqCst) {
-                    criterion::black_box(t!("hello"));
+                    black_box(t!("hello"));
                 }
             }));
         }
