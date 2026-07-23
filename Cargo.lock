@@ -3165,7 +3165,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rust-i18n"
-version = "4.2.1"
+version = "4.3.0"
 dependencies = [
  "criterion",
  "foo",
@@ -3182,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n-cli"
-version = "4.2.1"
+version = "4.3.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -3201,7 +3201,7 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n-extract"
-version = "4.2.1"
+version = "4.3.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n-macro"
-version = "4.2.1"
+version = "4.3.0"
 dependencies = [
  "glob",
  "proc-macro2",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "rust-i18n-support"
-version = "4.2.1"
+version = "4.3.0"
 dependencies = [
  "arc-swap",
  "base62",
