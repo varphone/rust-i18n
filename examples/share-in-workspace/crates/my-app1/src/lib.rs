@@ -1,7 +1,5 @@
 use i18n::t;
 
-i18n::init!();
-
 #[allow(dead_code)]
 fn assert_messages() {
     assert_eq!(

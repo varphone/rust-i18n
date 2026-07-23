@@ -1,8 +1,6 @@
-i18n::init!();
-
 #[cfg(test)]
 mod tests {
-    use rust_i18n::t;
+    use i18n::t;
 
     #[test]
     fn test_load_str() {
